@@ -1339,18 +1339,43 @@ duk_ret_t _eat_send_text_sms(duk_context *ctx) {
 	return 1;
 }
 
-static void eat_ftp_get(){
-  /*
-    {"AT+FTPCID=1"AT_CMD_END, 13, NULL},
-    {"AT+FTPUN=", 0, NULL},                           
-    {"AT+FTPPW=", 0, NULL},                          
-    {"AT+FTPGETNAME=", 0, NULL},                      
-    {"AT+FTPGETPATH=", 0, NULL},                      
-    {"AT+FTPSERV=", 0, NULL},                        
-    {"AT+FTPPORT=", 0, NULL},                         
-    {"AT+FTPTIMEOUT=3", 0, NULL},                   
-    {"AT+FTPGETTOFS=0,", 0, NULL}                    
-  */
+static void eat_ftp_get(const char *server, const char *port, const char *username, const char *password, const char *filename,const char *localpath){
+  static char buff[1024]={0};
+  
+  eat_modem_write("AT+FTPCID=1\r\n", strlen("AT+FTPCID=1\r\n"));
+  eat_sleep(500);
+  sprintf(buff,"AT+FTPUN=%s\r\n", username);
+  eat_modem_write(buff, strlen(buff));
+  eat_sleep(500);
+  sprintf(buff,"AT+FTPPW=%s\r\n", password);
+  eat_modem_write(buff, strlen(buff));
+  eat_sleep(500);
+  sprintf(buff,"AT+FTPGETNAME=%s\r\n", filename);
+  eat_modem_write(buff, strlen(buff));
+  eat_sleep(500);
+  sprintf(buff,"AT+FTPGETPATH=%s\r\n", localpath);
+  eat_modem_write(buff, strlen(buff));
+  eat_sleep(500);
+  sprintf(buff,"AT+FTPSERV=%s\r\n", server);
+  eat_modem_write(buff, strlen(buff));
+  eat_sleep(500);
+  sprintf(buff,"AT+FTPPORT=%s\r\n", port);
+  eat_modem_write(buff, strlen(buff));
+  eat_sleep(500);
+  eat_modem_write("AT+FTPTIMEOUT=3\r\n", strlen("AT+FTPTIMEOUT=3\r\n"));
+  eat_sleep(500);
+  eat_modem_write("AT+FTPGETTOFS=0\r\n", strlen("AT+FTPGETTOFS=0\r\n"));
+}
+
+duk_ret_t _eat_ftp_get(duk_context *ctx) {
+  const char *server  = duk_get_string(ctx, 0);
+  const char *port = duk_get_string(ctx, 1); 
+  const char *username = duk_get_string(ctx, 2); 
+  const char *password = duk_get_string(ctx, 3); 
+  const char *filename = duk_get_string(ctx, 4);
+  const char *localpath = duk_get_string(ctx, 5);
+	eat_ftp_get(server, port, username, password, filename, localpath);
+	return 1;
 }
 
 static u8 eat_upgrade_app(const char *fileName){
@@ -1467,10 +1492,13 @@ register_bindings(duk_context *ctx){
   duk_push_c_function(ctx, _eat_trace, DUK_VARARGS);
   duk_put_global_string(ctx, "eat_trace");
 
-  duk_push_c_function(ctx, _eat_read_sms, DUK_VARARGS);
+  duk_push_c_function(ctx, _eat_ftp_get, 6);
+  duk_put_global_string(ctx, "eat_ftp_get");
+
+  duk_push_c_function(ctx, _eat_read_sms, 1);
   duk_put_global_string(ctx, "eat_read_sms");
 
-  duk_push_c_function(ctx, _eat_upgrade_app, DUK_VARARGS);
+  duk_push_c_function(ctx, _eat_upgrade_app, 1);
   duk_put_global_string(ctx, "eat_upgrade_app");
 
   duk_push_c_function(ctx, _eat_sms_init, 4);
