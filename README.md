@@ -6,7 +6,7 @@ You will need the EAT for sim868 and compile from there.
 it will autorun the index.js file in the SD.
 
 simple index.js:
-
+```javascript
 function event_callback(event){
 	eat_trace(JSON.stringify(event));
 	if(event.event==1 && event.timer_id==1){
@@ -16,3 +16,4 @@ function event_callback(event){
 }
 
 eat_timer_start(1,2000);
+```
