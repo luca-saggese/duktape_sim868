@@ -47,7 +47,7 @@
 #include "eat_mem.h"
 #define DYNAMIC_MEM_SIZE 1024*400
 static unsigned char app_dynamic_mem[DYNAMIC_MEM_SIZE];
-duk_context *global_ctx;
+duk_context *global_ctx=0;
 
 /********************************************************************
  * Macros
@@ -79,6 +79,7 @@ static char gps_info_buf[NMEA_BUFF_SIZE]="";
  * External Functions declaration
  ********************************************************************/
 extern void APP_InitRegions(void);
+void initHeap();
 
 /********************************************************************
  * Local Function declaration
@@ -137,23 +138,28 @@ duk_ret_t cb_resolve_module(duk_context *ctx) {
 }
 
 int load_file(duk_context *ctx, char *filename) {
-    static char readBuf[2048]='\0';
+    static char * readBuf;
     unsigned int readLen=2048;
-    unsigned int Len=2048;
+    //unsigned int Len=2048;
+    int fs_Op_ret;
+    unsigned int size;
     int FileHandle1 = eat_fs_Open((const unsigned short *)filename,FS_READ_WRITE);
     if(FileHandle1>EAT_FS_NO_ERROR){
-      while(readLen==Len){
-        int fs_Op_ret=eat_fs_Read(FileHandle1, readBuf, Len, &readLen);  
-        if(EAT_FS_NO_ERROR!=fs_Op_ret){
-          eat_trace("Read File Fail,and Return Error is %d,Readlen is %d",fs_Op_ret,readLen);
-          eat_fs_Close(FileHandle1);
-          return 0;        
-        } else {                     
-          duk_push_string(ctx, readBuf);        
-        }
+      eat_fs_GetFileSize(FileHandle1, &size);
+      readBuf=eat_mem_alloc(size+1);
+      fs_Op_ret=eat_fs_Read(FileHandle1, readBuf, size, &readLen);  
+      readBuf[readLen]='\0';
+      if(EAT_FS_NO_ERROR!=fs_Op_ret){
+        eat_trace("Read File Fail,and Return Error is %d,Readlen is %d",fs_Op_ret,readLen);
+        eat_fs_Close(FileHandle1);
+        return 0;        
+      } else {    
+        eat_trace("filesize:%d readLen:%d", size, readLen);                 
+        duk_push_string(ctx, readBuf);        
       }
       duk_eval_noresult(ctx);
       eat_fs_Close(FileHandle1);
+      eat_mem_free(readBuf);
 
       return 1;
     }else{
@@ -344,28 +350,43 @@ eat_bool eat_modem_data_parse(u8* buffer, u16 len, u8* param1, u8* param2)
 }
 
 //Read data from Modem
+
+static char * fixstr(char* buff, int len){
+  int i;
+  for(i=0;i<len;i++){
+    if(buff[i]=='\r' || buff[i]=='\n' || buff[i]=='\''){
+      buff[i]='_';
+    }
+  }
+  return buff;
+}
+
+
 void mdm_rx_proc(void)
 {
-    u8 buf[2048];
+   /*u8 buf[2048];
+    u8 buf2[1024];
+    int i,j=0;
+    char strbuf[2048];
     u8 param1,param2;
     u16 len = 0;
     len = eat_modem_read(buf, 2048);
-    eat_trace(buf);/*
-    if(len > 0)
-    {
-        //Get the testing parameter
-        if(eat_modem_data_parse(buf,len,&param1,&param2))
-        {
-          //evalJs("2+1");
-          //evalJs("eat_trace('hello world')");
-            //eat_module_test_adc(param1, param2);
+    for(i=0;i<len;i++){
+      if(buf[0]=='\''){
+        buf[0]='_';
+      }
+      if(buf[0]=='\r'){
+        strncpy(&buf2,&buf, i-j);
+        sprintf(strbuf, "if(typeof modem_callback !== 'undefined'){ modem_callback('%s'); }", buf2 );
+        if(global_ctx!=0){
+          duk_eval_string(global_ctx, strbuf);
+        }else{
+          eat_trace(buf);
         }
-        else
-        {
-            eat_trace("From Mdm:%s",buf);
-        }
+        j=i+2;
+      }
+      *buf++;
     }*/
-
 }
 
 static void uart_rx_proc(const EatEvent_st* event)
@@ -377,14 +398,46 @@ static void uart_rx_proc(const EatEvent_st* event)
 
     if(len != 0)
     {
-        rx_buf[len] = '\0';
-        eat_trace("> %s", rx_buf);
+      rx_buf[len] = '\0';
+      eat_trace("> %s", rx_buf);
 
-        duk_eval_string(global_ctx, rx_buf);
+      duk_eval_string(global_ctx, rx_buf);
+      if (duk_get_type(global_ctx, -1) == DUK_TYPE_NUMBER) {
+        eat_trace("%d", duk_get_int(global_ctx, -1));
+      }else{
+        eat_trace((char *)duk_get_string(global_ctx, -1));
+      }
+      
         
         //eat_uart_write(uart, rx_buf, len);
         
     }
+}
+
+
+
+
+
+static void my_fatal(void *udata, const char *msg) {
+    (void) udata;  /* ignored in this case, silence warning */
+
+    /* Note that 'msg' may be NULL. */
+    eat_trace("*** FATAL ERROR: %s\nREBOOTING..", (msg ? msg : "no message"));
+    eat_sleep(1000);
+    eat_reset_module();
+}
+
+void initHeap(){
+  global_ctx = duk_create_heap(NULL, NULL, NULL, NULL, my_fatal);
+    eat_trace("heap created");
+
+    register_bindings2(global_ctx);
+
+    if(load_file(global_ctx, (char *)INDEX_FILE)) {
+      eat_trace("index.js loaded");
+    }
+
+    duk_eval_string(global_ctx, "eat_trace('js is working!');");
 }
 
 void app_main(void *data)
@@ -419,29 +472,15 @@ void app_main(void *data)
       eat_trace("eat_mem_init() ERROR\n");
     } 
 
-
-    global_ctx = duk_create_heap_default();
-    eat_trace("heap created");
-
-    register_bindings2(global_ctx);
-
-    if(load_file(global_ctx, (char *)INDEX_FILE)) {
-      eat_trace("index.js loaded");
-    }
-
-
-
-    //duk_eval_string(global_ctx, "1+2");
-    //eat_trace("1+2=%d\n", (int) duk_get_int(global_ctx, -1));
+    initHeap();
     
-    duk_eval_string(global_ctx, "eat_trace('js is working!');");
     //duk_eval_string(global_ctx, "eat_trace( eat_get_version());");
     //duk_destroy_heap(ctx);
 
 
     //event_register_handler(EAT_EVENT_TIMER, timer_proc);
     //event_register_handler(EAT_EVENT_KEY, key_proc);
-    //event_register_handler(EAT_EVENT_MDM_READY_RD, (event_handler_func)mdm_rx_proc);
+    event_register_handler(EAT_EVENT_MDM_READY_RD, (event_handler_func)mdm_rx_proc);
     //event_register_handler(EAT_EVENT_MDM_READY_WR, mdm_tx_proc);
     //event_register_handler(EAT_EVENT_INT, int_proc);
     event_register_handler(EAT_EVENT_UART_READY_RD, uart_rx_proc);
@@ -460,19 +499,19 @@ void app_main(void *data)
     {
         eat_get_event(&event);
         if(event.event==EAT_EVENT_TIMER){
-           sprintf(strbuf, "if(event_callback){ event_callback({event:%d, timer_id:%d}); }", event.event, event.data.timer.timer_id );
+           sprintf(strbuf, "if(typeof event_callback !== 'undefined'){ event_callback({event:%d, timer_id:%d}); }", event.event, event.data.timer.timer_id );
         }else if(event.event==EAT_EVENT_KEY){
-           sprintf(strbuf, "if(event_callback){ event_callback({event:%d, key_value:%d, is_pressed:%d}); }", event.event, event.data.key.key_value, event.data.key.is_pressed );
+           sprintf(strbuf, "if(typeof event_callback !== 'undefined'){ event_callback({event:%d, key_value:%d, is_pressed:%d}); }", event.event, event.data.key.key_value, event.data.key.is_pressed );
         }else if(event.event==EAT_EVENT_INT){
-           sprintf(strbuf, "if(event_callback){ event_callback({event:%d, pin:%d, level:%d}); }", event.event, event.data.interrupt.pin, event.data.interrupt.level );
+           sprintf(strbuf, "if(typeof event_callback !== 'undefined'){ event_callback({event:%d, pin:%d, level:%d}); }", event.event, event.data.interrupt.pin, event.data.interrupt.level );
         }else if(event.event==EAT_EVENT_UART_READY_RD || event.event==EAT_EVENT_UART_READY_WR || event.event==EAT_EVENT_UART_SEND_COMPLETE){
-           sprintf(strbuf, "if(event_callback){ event_callback({event:%d, uart:%d}); }", event.event, event.data.uart.uart );
+           sprintf(strbuf, "if(typeof event_callback !== 'undefined'){ event_callback({event:%d, uart:%d}); }", event.event, event.data.uart.uart );
         }else if(event.event==EAT_EVENT_ADC){
-           sprintf(strbuf, "if(event_callback){ event_callback({event:%d, pin:%d, v:%d}); }", event.event, event.data.adc.pin, event.data.adc.v );
+           sprintf(strbuf, "if(typeof event_callback !== 'undefined'){ event_callback({event:%d, pin:%d, v:%d}); }", event.event, event.data.adc.pin, event.data.adc.v );
         }else if(event.event==EAT_EVENT_USER_MSG){
-           sprintf(strbuf, "if(event_callback){ event_callback({event:%d, src:%d, use_point:%d}); }", event.event, event.data.user_msg.src, event.data.user_msg.use_point );
+           sprintf(strbuf, "if(typeof event_callback !== 'undefined'){ event_callback({event:%d, src:%d, use_point:%d}); }", event.event, event.data.user_msg.src, event.data.user_msg.use_point );
         }else{
-          sprintf(strbuf, "if(event_callback){ event_callback({event:%d}); }", event.event );
+          sprintf(strbuf, "if(typeof event_callback !== 'undefined'){ event_callback({event:%d}); }", event.event );
         }
 
         duk_eval_string(global_ctx, strbuf);

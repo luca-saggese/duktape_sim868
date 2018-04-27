@@ -7,8 +7,21 @@
 #include "eat_interface.h"
 #include "eat_uart.h"
 #include "eat_gps.h"
+#include "eat_socket.h"
+#include "eat_sms.h"
 
 #include "duktape.h"
+
+duk_context *_ctx;
+
+wchar_t *ctow(const char *buf, wchar_t *output) {
+  wchar_t *cr = output;
+  while (*buf) {
+    *output++ = *buf++;
+  }
+  *output = 0;
+  return cr;
+}
 
 duk_ret_t _eat_gpio_setup(duk_context *ctx) {
 	EatPinName_enum pin = (EatPinName_enum) duk_get_int(ctx, 0);
@@ -240,25 +253,25 @@ duk_ret_t _eat_get_module_temp_asyn(duk_context *ctx) {
 	return 1;
 }
 */
-/*
+
 duk_ret_t _eat_get_cbc(duk_context *ctx) {
-	EAT_CBC_ST *bmt = (EAT_CBC_ST) duk_get_int(ctx, 0);
-	eat_bool ret = eat_get_cbc(*bmt);
+  EAT_CBC_ST bmt={0};
+	eat_bool ret = eat_get_cbc(&bmt);
 	duk_push_int(ctx, ret);
 	return 1;
 }
-*/
+
 
 duk_ret_t _eat_get_imei(duk_context *ctx) {
-	u8 imei[22]={0};
-	u8 * ret = eat_get_imei((u8*)&imei, 22);
+	u8 imei[15]={0};
+	u8 * ret = eat_get_imei((u8*)&imei, 15);
 	duk_push_string(ctx, imei);
 	return 1;
 }
 
 duk_ret_t _eat_get_imsi(duk_context *ctx) {
-	u8 imsi[22]={0};
-	u8 * ret = eat_get_imsi((u8*)&imsi, 22);
+	u8 imsi[17]={0};
+	u8 * ret = eat_get_imsi((u8*)&imsi, 17);
 	duk_push_string(ctx, imsi);
 	return 1;
 }
@@ -403,7 +416,8 @@ duk_ret_t _eat_gps_register_msg_proc_callback(duk_context *ctx) {
 }
 
 duk_ret_t _eat_fs_Open(duk_context *ctx) {
-	const unsigned short *FileName = (const unsigned short *) duk_get_string(ctx, 0);
+  wchar_t wfname[2048];
+	const unsigned short *FileName = (const unsigned short *) ctow(duk_get_string(ctx, 0), (wchar_t *)&wfname);
 	UINT Flag = (UINT) duk_get_int(ctx, 1);
 	int ret = eat_fs_Open(FileName, Flag);
 	duk_push_int(ctx, ret);
@@ -418,12 +432,16 @@ duk_ret_t _eat_fs_Close(duk_context *ctx) {
 }
 
 duk_ret_t _eat_fs_Read(duk_context *ctx) {
-  char DataPtr[2048] ={0};
+  char *DataPtr;
+  int ret;
 	FS_HANDLE FileHandle = (FS_HANDLE) duk_get_int(ctx, 0);
 	UINT Length = (UINT) duk_get_int(ctx, 1);
 	UINT Read = 0;
-	int ret = eat_fs_Read(FileHandle, (char*)&DataPtr, Length, &Read);
+  DataPtr=eat_mem_alloc(Length+1);
+	ret = eat_fs_Read(FileHandle, DataPtr, Length, &Read);
+  DataPtr[Length+1]='\0';
 	duk_push_string(ctx, DataPtr);
+  eat_mem_free(DataPtr);
 	return 1;
 }
 
@@ -536,8 +554,10 @@ duk_ret_t _eat_fs_GetDiskSize(duk_context *ctx) {
 }
 
 duk_ret_t _eat_fs_Rename(duk_context *ctx) {
-	const WCHAR *FileName = (const WCHAR *) duk_get_int(ctx, 0);
-	const WCHAR *NewName = (const WCHAR *) duk_get_int(ctx, 1);
+  wchar_t wfname[2048];
+  wchar_t wfname2[2048];
+	const WCHAR *FileName = (const WCHAR *) ctow(duk_get_string(ctx, 0), (wchar_t *)&wfname);
+  const WCHAR *NewName = (const WCHAR *) ctow(duk_get_string(ctx, 1), (wchar_t *)&wfname2);
 	int ret = eat_fs_Rename(FileName, NewName);
 	duk_push_int(ctx, ret);
 	return 1;
@@ -1056,10 +1076,468 @@ static duk_ret_t _eat_trace(duk_context *ctx) {
   return 0;  // no return value (= undefined) 
 }
 
+static void bear_notify_cb(cbm_bearer_state_enum state, u8 ip_addr[4]){
+  char strbuf[1024];
+  sprintf(strbuf, "if(typeof bear_notify_cb !== 'undefined'){bear_notify_cb(%d, '%d.%d.%d.%d');}", state, ip_addr[0], ip_addr[1], ip_addr[2], ip_addr[3]);
+  duk_eval_string_noresult(_ctx, strbuf);
+}
+
+duk_ret_t  _eat_gprs_bearer_open(duk_context *ctx) {
+	u8 *apn = (u8 *) duk_get_string(ctx, 0);
+	u8 *user = (u8 *) duk_get_string(ctx, 1);
+	u8 *password = (u8 *) duk_get_string(ctx, 2);
+	eat_bear_notify call_back = bear_notify_cb;//(eat_bear_notify) duk_get_int(ctx, 3);
+	s8  ret = eat_gprs_bearer_open(apn, user, password, call_back);
+	duk_push_int(ctx, ret);
+	return 1;
+}
+
+duk_ret_t  _eat_gprs_bearer_hold(duk_context *ctx) {
+	s8  ret = eat_gprs_bearer_hold();
+	duk_push_int(ctx, ret);
+	return 1;
+}
+
+duk_ret_t  _eat_gprs_bearer_release(duk_context *ctx) {
+	s8  ret = eat_gprs_bearer_release();
+	duk_push_int(ctx, ret);
+	return 1;
+}
+
+
+duk_ret_t _eat_soc_create(duk_context *ctx) {
+	socket_type_enum type = (socket_type_enum) duk_get_int(ctx, 0);
+	u8 protocol = (u8) duk_get_int(ctx, 1);
+	s8 ret = eat_soc_create(type, protocol);
+	duk_push_int(ctx, ret);
+	return 1;
+}
+
+
+duk_ret_t _eat_soc_connect(duk_context *ctx) {
+  sockaddr_struct address={0};
+  s8 ret=0;
+	s8 s = (s8) duk_get_int(ctx, 0);
+	const char *addr = duk_get_string(ctx, 1);
+  int ip1,ip2,ip3,ip4,port;
+  sscanf((const char *)addr, "%d.%d.%d.%d:%d", &ip1, &ip2, &ip3, &ip4, &port);
+  address.sock_type = SOC_SOCK_STREAM;
+  address.addr_len = 4;
+  address.port = port;                /* TCP server port */
+  address.addr[0]=ip1;                /* TCP server ip address */
+  address.addr[1]=ip2;
+  address.addr[2]=ip3;
+  address.addr[3]=ip4;
+  ret = eat_soc_connect(s, &address);
+	duk_push_int(ctx, ret);
+	return 1;
+}
+
+duk_ret_t _eat_soc_setsockopt(duk_context *ctx) {
+	s8 s = (s8) duk_get_int(ctx, 0);
+	u32 option = (u32) duk_get_int(ctx, 1);
+	int val = duk_get_int(ctx, 2);
+	s8 ret = eat_soc_setsockopt(s, option, &val, sizeof(val));
+	duk_push_int(ctx, ret);
+	return 1;
+}
+
+duk_ret_t _eat_soc_getsockopt(duk_context *ctx) {
+	s8 s = (s8) duk_get_int(ctx, 0);
+	u32 option = (u32) duk_get_int(ctx, 1);
+	int val = 0;
+	s8 ret = eat_soc_getsockopt(s, option, &val, sizeof(val));
+	duk_push_int(ctx, val);
+	return 1;
+}
+
+duk_ret_t _eat_soc_bind(duk_context *ctx) {
+	sockaddr_struct address={0};
+	s8 s = (s8) duk_get_int(ctx, 0);
+  s8 ret =0;
+	const char *addr = duk_get_string(ctx, 1);
+  int ip1,ip2,ip3,ip4,port;
+  sscanf((const char *)addr, "%d.%d.%d.%d:%d", &ip1, &ip2, &ip3, &ip4, &port);
+  address.sock_type = SOC_SOCK_STREAM;
+  address.addr_len = 4;
+  address.port = port;                /* TCP server port */
+  address.addr[0]=ip1;                /* TCP server ip address */
+  address.addr[1]=ip2;
+  address.addr[2]=ip3;
+  address.addr[3]=ip4;
+	ret = eat_soc_bind(s, &address);
+	duk_push_int(ctx, ret);
+	return 1;
+}
+
+duk_ret_t _eat_soc_listen(duk_context *ctx) {
+	s8 s = (s8) duk_get_int(ctx, 0);
+	u8 backlog = (u8) duk_get_int(ctx, 1);
+	s8 ret = eat_soc_listen(s, backlog);
+	duk_push_int(ctx, ret);
+	return 1;
+}
+
+duk_ret_t _eat_soc_accept(duk_context *ctx) {
+	sockaddr_struct address={0};
+  s8 ret=0;
+	s8 s = (s8) duk_get_int(ctx, 0);
+	const char *addr = duk_get_string(ctx, 1);
+  int ip1,ip2,ip3,ip4,port;
+  sscanf((const char *)addr, "%d.%d.%d.%d:%d", &ip1, &ip2, &ip3, &ip4, &port);
+  address.sock_type = SOC_SOCK_STREAM;
+  address.addr_len = 4;
+  address.port = port;                /* TCP server port */
+  address.addr[0]=ip1;                /* TCP server ip address */
+  address.addr[1]=ip2;
+  address.addr[2]=ip3;
+  address.addr[3]=ip4;
+	ret = eat_soc_accept(s, &address);
+	duk_push_int(ctx, ret);
+	return 1;
+}
+
+duk_ret_t _eat_soc_send(duk_context *ctx) {
+	s8 s = (s8) duk_get_int(ctx, 0);
+	const char *buf = duk_get_string(ctx, 1);
+	s32 len = (s32) duk_get_int(ctx, 2);
+	s32 ret = eat_soc_send(s, buf, len);
+	duk_push_int(ctx, ret);
+	return 1;
+}
+
+duk_ret_t _eat_soc_recv(duk_context *ctx) {
+	s8 s = (s8) duk_get_int(ctx, 0);
+	char buf[2048]={0};
+	s32 len = (s32) duk_get_int(ctx, 1);
+	s32 ret = eat_soc_recv(s, &buf, len);
+	duk_push_string(ctx, buf);
+	return 1;
+}
+
+duk_ret_t _eat_soc_sendto(duk_context *ctx) {
+  sockaddr_struct address={0};
+  s32 ret=0;
+	s8 s = (s8) duk_get_int(ctx, 0);
+	const char *buf = duk_get_string(ctx, 1);
+  int len = duk_get_int(ctx,2);
+	const char *addr = duk_get_string(ctx, 3);
+  int ip1,ip2,ip3,ip4,port;
+  sscanf((const char *)addr, "%d.%d.%d.%d:%d", &ip1, &ip2, &ip3, &ip4, &port);
+  address.sock_type = SOC_SOCK_STREAM;
+  address.addr_len = 4;
+  address.port = port;                /* TCP server port */
+  address.addr[0]=ip1;                /* TCP server ip address */
+  address.addr[1]=ip2;
+  address.addr[2]=ip3;
+  address.addr[3]=ip4;
+	ret = eat_soc_sendto(s, buf, len, &address);
+	duk_push_int(ctx, ret);
+	return 1;
+}
+/*
+duk_ret_t _eat_soc_recvfrom(duk_context *ctx) {
+	s8 s = (s8) duk_get_int(ctx, 0);
+	void *buf = (void) duk_get_int(ctx, 1);
+	s32 len = (s32) duk_get_int(ctx, 2);
+	sockaddr_struct *fromaddr = (sockaddr_struct) duk_get_int(ctx, 3);
+	s32 ret = eat_soc_recvfrom(s, *buf, len, *fromaddr);
+	duk_push_int(ctx, ret);
+	return 1;
+}
+
+duk_ret_t _eat_soc_select(duk_context *ctx) {
+	u8 ndesc = (u8) duk_get_int(ctx, 0);
+	soc_fd_set *in = (soc_fd_set) duk_get_int(ctx, 1);
+	soc_fd_set *out = (soc_fd_set) duk_get_int(ctx, 2);
+	soc_fd_set *ex = (soc_fd_set) duk_get_int(ctx, 3);
+	soc_timeval_struct *tv = (soc_timeval_struct) duk_get_int(ctx, 4);
+	s8 ret = eat_soc_select(ndesc, *in, *out, *ex, *tv);
+	duk_push_int(ctx, ret);
+	return 1;
+}
+
+duk_ret_t _eat_soc_fd_set(duk_context *ctx) {
+	u8 s = (u8) duk_get_int(ctx, 0);
+	soc_fd_set *p = (soc_fd_set) duk_get_int(ctx, 1);
+	void ret = eat_soc_fd_set(s, *p);
+	duk_push_int(ctx, ret);
+	return 1;
+}
+*/
+/*
+duk_ret_t _eat_soc_gethostbyname(duk_context *ctx) {
+	const char *domain_name = (const char) duk_get_int(ctx, 0);
+	u8 *addr = (u8) duk_get_int(ctx, 1);
+	u8 *addr_len = (u8) duk_get_int(ctx, 2);
+	u32 request_id = (u32) duk_get_int(ctx, 3);
+	s8 ret = eat_soc_gethostbyname(*domain_name, *addr, *addr_len, request_id);
+	duk_push_int(ctx, ret);
+	return 1;
+}
+*/
+/*
+duk_ret_t _eat_soc_gethost_notify_register(duk_context *ctx) {
+	eat_hostname_notify call_back = (eat_hostname_notify) duk_get_int(ctx, 0);
+	eat_soc_gethost_notify_register(call_back);
+	return 1;
+}
+*/
+/*
+duk_ret_t _eat_soc_getsockaddr(duk_context *ctx) {
+	s8 s = (s8) duk_get_int(ctx, 0);
+	eat_bool is_local = (eat_bool) duk_get_int(ctx, 1);
+	sockaddr_struct *addr = (sockaddr_struct) duk_get_int(ctx, 2);
+	s8 ret = eat_soc_getsockaddr(s, is_local, *addr);
+	duk_push_int(ctx, ret);
+	return 1;
+}
+*/
+
+duk_ret_t _eat_soc_close(duk_context *ctx) {
+	s8 s = (s8) duk_get_int(ctx, 0);
+	s8 ret = eat_soc_close(s);
+	duk_push_int(ctx, ret);
+	return 1;
+}
+
+
+static void soc_notify_cb(s8 s,soc_event_enum event,eat_bool result, u16 ack_size){
+  char strbuf[1024];
+  sprintf(strbuf, "if(typeof soc_notify_cb !== 'undefined'){soc_notify_cb(%d, %d, %d, %d);}", s, event, result, ack_size);
+  duk_eval_string_noresult(_ctx, strbuf);
+}
+
+static void eat_sms_new_message_cb(EatSmsNewMessageInd_st smsNewMessage)
+{
+  char strbuf[1024];
+  sprintf(strbuf, "if(typeof eat_sms_new_message_cb !== 'undefined'){eat_sms_new_message_cb(%d);}", smsNewMessage);
+  duk_eval_string_noresult(_ctx, strbuf);
+  //  eat_read_sms(smsNewMessage.index, eat_sms_read_cb);
+}
+
+static void eat_sms_read_cb(EatSmsReadCnf_st smsReadCnfContent)
+{
+  char strbuf[1024];
+  sprintf(strbuf, "if(typeof eat_sms_read_cb !== 'undefined'){eat_sms_read_cb(%s);}", smsReadCnfContent.data);
+  duk_eval_string_noresult(_ctx, strbuf);
+}
+
+duk_ret_t _eat_read_sms(duk_context *ctx) {
+	int index = (int) duk_get_int(ctx, 0);
+	s8 ret = eat_read_sms(index, eat_sms_read_cb);
+	duk_push_int(ctx, ret);
+	return 1;
+}
+
+
+duk_ret_t _eat_send_text_sms(duk_context *ctx) {
+	const char * number = duk_get_string(ctx, 0);
+  const char * message = duk_get_string(ctx, 1);
+	s8 ret = eat_send_text_sms((u8*)number, (u8*)message);
+	duk_push_int(ctx, ret);
+	return 1;
+}
+
+static void eat_ftp_get(){
+  /*
+    {"AT+FTPCID=1"AT_CMD_END, 13, NULL},
+    {"AT+FTPUN=", 0, NULL},                           
+    {"AT+FTPPW=", 0, NULL},                          
+    {"AT+FTPGETNAME=", 0, NULL},                      
+    {"AT+FTPGETPATH=", 0, NULL},                      
+    {"AT+FTPSERV=", 0, NULL},                        
+    {"AT+FTPPORT=", 0, NULL},                         
+    {"AT+FTPTIMEOUT=3", 0, NULL},                   
+    {"AT+FTPGETTOFS=0,", 0, NULL}                    
+  */
+}
+
+static u8 eat_upgrade_app(const char *fileName){
+  u8 *data;
+  u32 APP_DATA_RUN_BASE;  //app run addr
+  u32 APP_DATA_STORAGE_BASE;  //app data storage addr
+  u32 app_space_value,size, fileHandle;
+  eat_bool rc;
+  u32 ret;
+  wchar_t wfname[2048];
+	const unsigned short *FileName = (const unsigned short *) ctow(fileName, (wchar_t *)&wfname);
+
+  fileHandle = eat_fs_Open(FileName, FS_READ_ONLY);
+  if(fileHandle<EAT_FS_NO_ERROR){
+    eat_trace("unable to open file");
+    return -1;
+  }
+  eat_fs_GetFileSize(fileHandle, &size);
+  data = eat_mem_alloc(size);
+  eat_fs_Read(fileHandle, data, size, &ret);
+  eat_fs_Close(fileHandle);
+
+  APP_DATA_RUN_BASE = eat_get_app_base_addr(); //get app addr
+  eat_trace("APP_DATA_RUN_BASE : %#x",APP_DATA_RUN_BASE);
+
+  app_space_value = eat_get_app_space();  //get app space size
+  eat_trace("app_space_value : %#x", app_space_value);
+
+  APP_DATA_STORAGE_BASE = APP_DATA_RUN_BASE + (app_space_value>>1);//second half is space use to storage app_upgrade_data
+
+  rc = eat_flash_erase((void*)APP_DATA_STORAGE_BASE , size);//erase the flash to write new app_data_storage
+  if(EAT_FALSE == rc)
+  {
+      eat_trace("Erase flash failed [0x%08x, %dKByte]", APP_DATA_STORAGE_BASE,  size / 1024);
+      return rc;
+  }
+
+  rc = eat_flash_write((void*)APP_DATA_STORAGE_BASE , data , size);//write the new app_data_storage
+  if(EAT_FALSE == rc)
+  {
+      eat_trace("Write Flash Failed.");
+      return rc;
+  }
+
+  //upgrade app
+  eat_update_app((void*)(APP_DATA_RUN_BASE),(void*)(APP_DATA_STORAGE_BASE), size, EAT_PIN_NUM, EAT_PIN_NUM,EAT_FALSE);
+  return 1;
+}
+
+duk_ret_t _eat_upgrade_app(duk_context *ctx) {
+	const char * filename = duk_get_string(ctx, 0);
+	s8 ret = eat_upgrade_app(filename);
+	duk_push_int(ctx, ret);
+	return 1;
+}
+
+static void eat_sms_ready_cb(eat_bool result)
+{
+  char strbuf[1024];
+  sprintf(strbuf, "if(typeof eat_sms_ready_cb !== 'undefined'){eat_sms_ready_cb(%d);}", result);
+  duk_eval_string_noresult(_ctx, strbuf);
+}
+
+static eat_sms_flash_message_cb(EatSmsReadCnf_st smsFlashMessage)
+{
+    u8 format = 0;
+
+    eat_trace("flash message.");
+    eat_get_sms_format(&format);
+    if(1 == format)//TEXTʽ
+    {
+        eat_trace("recv TEXT sms.");
+        eat_trace("msg=%s.",smsFlashMessage.data);
+        eat_trace("datetime=%s.",smsFlashMessage.datetime);
+        eat_trace("name=%s.",smsFlashMessage.name);
+        eat_trace("status=%d.",smsFlashMessage.status);
+        eat_trace("len=%d.",smsFlashMessage.len);
+        eat_trace("number=%s.",smsFlashMessage.number);
+    }
+    else//PDU
+    {
+        eat_trace("recv PDU sms.");
+        eat_trace("msg=%s",smsFlashMessage.data);
+        eat_trace("len=%d",smsFlashMessage.len);
+    }
+}
+
+static void eat_sms_send_cb(eat_bool result)
+{
+  char strbuf[1024];
+  sprintf(strbuf, "if(typeof eat_sms_send_cb !== 'undefined'){eat_sms_send_cb(%d);}", result);
+  duk_eval_string_noresult(_ctx, strbuf);
+}
+
+duk_ret_t _eat_sms_init(duk_context *ctx) {
+	eat_set_sms_operation_mode(EAT_TRUE); //set sms operation as API mode
+  eat_set_sms_format(EAT_TRUE);//set sms format as TEXT mode
+  //eat_set_sms_cnmi(0,0,0,0,0);//set sms cnmi parameter
+  //eat_set_sms_sc("+8613800290500");//set center number
+  //eat_set_sms_storage(EAT_ME, EAT_ME, EAT_ME);//set sms storage type
+  eat_sms_register_new_message_callback(eat_sms_new_message_cb);
+  eat_sms_register_sms_ready_callback(eat_sms_ready_cb);
+  eat_sms_register_flash_message_callback(eat_sms_flash_message_cb);
+  eat_sms_register_send_completed_callback(eat_sms_send_cb);
+	return 0;
+}
+
+
 register_bindings(duk_context *ctx){
+  _ctx=ctx;
+
+  eat_soc_notify_register(soc_notify_cb);
 
   duk_push_c_function(ctx, _eat_trace, DUK_VARARGS);
   duk_put_global_string(ctx, "eat_trace");
+
+  duk_push_c_function(ctx, _eat_read_sms, DUK_VARARGS);
+  duk_put_global_string(ctx, "eat_read_sms");
+
+  duk_push_c_function(ctx, _eat_upgrade_app, DUK_VARARGS);
+  duk_put_global_string(ctx, "eat_upgrade_app");
+
+  duk_push_c_function(ctx, _eat_sms_init, 4);
+	duk_put_global_string(ctx, "eat_sms_init");
+
+  duk_push_c_function(ctx, _eat_send_text_sms, 2);
+	duk_put_global_string(ctx, "eat_send_text_sms");
+  
+  duk_push_c_function(ctx, _eat_gprs_bearer_open, 4);
+	duk_put_global_string(ctx, "eat_gprs_bearer_open");
+
+	duk_push_c_function(ctx, _eat_gprs_bearer_hold, 0);
+	duk_put_global_string(ctx, "eat_gprs_bearer_hold");
+
+	duk_push_c_function(ctx, _eat_gprs_bearer_release, 0);
+	duk_put_global_string(ctx, "eat_gprs_bearer_release");
+
+	duk_push_c_function(ctx, _eat_soc_create, 2);
+	duk_put_global_string(ctx, "eat_soc_create");
+
+	duk_push_c_function(ctx, _eat_soc_connect, 2);
+	duk_put_global_string(ctx, "eat_soc_connect");
+
+	duk_push_c_function(ctx, _eat_soc_setsockopt, 4);
+	duk_put_global_string(ctx, "eat_soc_setsockopt");
+
+	duk_push_c_function(ctx, _eat_soc_getsockopt, 4);
+	duk_put_global_string(ctx, "eat_soc_getsockopt");
+
+	duk_push_c_function(ctx, _eat_soc_bind, 2);
+	duk_put_global_string(ctx, "eat_soc_bind");
+
+	duk_push_c_function(ctx, _eat_soc_listen, 2);
+	duk_put_global_string(ctx, "eat_soc_listen");
+
+	duk_push_c_function(ctx, _eat_soc_accept, 2);
+	duk_put_global_string(ctx, "eat_soc_accept");
+
+	duk_push_c_function(ctx, _eat_soc_send, 3);
+	duk_put_global_string(ctx, "eat_soc_send");
+
+	duk_push_c_function(ctx, _eat_soc_recv, 3);
+	duk_put_global_string(ctx, "eat_soc_recv");
+
+	duk_push_c_function(ctx, _eat_soc_sendto, 4);
+	duk_put_global_string(ctx, "eat_soc_sendto");
+
+	//duk_push_c_function(ctx, _eat_soc_recvfrom, 4);
+	//duk_put_global_string(ctx, "eat_soc_recvfrom");
+
+	//duk_push_c_function(ctx, _eat_soc_select, 5);
+	//duk_put_global_string(ctx, "eat_soc_select");
+
+	//duk_push_c_function(ctx, _eat_soc_fd_set, 2);
+	//duk_put_global_string(ctx, "eat_soc_fd_set");
+
+	//duk_push_c_function(ctx, _eat_soc_gethostbyname, 4);
+	//duk_put_global_string(ctx, "eat_soc_gethostbyname");
+
+	//duk_push_c_function(ctx, _eat_soc_gethost_notify_register, 1);
+	//duk_put_global_string(ctx, "eat_soc_gethost_notify_register");
+
+	//duk_push_c_function(ctx, _eat_soc_getsockaddr, 3);
+	//duk_put_global_string(ctx, "eat_soc_getsockaddr");
+
+	duk_push_c_function(ctx, _eat_soc_close, 1);
+	duk_put_global_string(ctx, "eat_soc_close");
 
 	duk_push_c_function(ctx, _eat_gpio_setup, 3);
 	duk_put_global_string(ctx, "eat_gpio_setup");
