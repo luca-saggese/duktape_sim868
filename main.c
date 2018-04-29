@@ -29,7 +29,7 @@
 #include "eat_modem.h"
 #include "eat_interface.h"
 #include "eat_uart.h"
-
+#include "eat_sms.h"
 #include "duktape.h"
 #include "duk_module_node.h"
 
@@ -45,9 +45,10 @@
 #include "eat_fs.h"
 
 #include "eat_mem.h"
-#define DYNAMIC_MEM_SIZE 1024*400
+#define DYNAMIC_MEM_SIZE 1024*300
 static unsigned char app_dynamic_mem[DYNAMIC_MEM_SIZE];
 duk_context *global_ctx=0;
+u8 heap_init=0;
 
 /********************************************************************
  * Macros
@@ -55,6 +56,7 @@ duk_context *global_ctx=0;
 #define EAT_UART_RX_BUF_LEN_MAX 2000
 #define INDEX_FILE L"D:\\index.js"
 #define NMEA_BUFF_SIZE 1024
+#define VERSION_STR "sim868_duktape v0.0.1"
 /********************************************************************
  * Types
  ********************************************************************/
@@ -91,34 +93,6 @@ void app_func_ext1(void *data);
  * C Bindings
  ********************************************************************/
  
-
-/*
-
-static duk_ret_t my_eat_gps_power_req(duk_context *ctx) {
-  int arg = duk_to_number(ctx, 1);
-  eat_gps_power_req((eat_bool) arg);
-  return 0;  // one return value 
-}
-
-static duk_ret_t my_eat_gps_power_status(duk_context *ctx) {
-  int res = eat_gps_power_status();
-  duk_push_number(ctx, res);
-  return 1;  // one return value 
-}
-
-static duk_ret_t my_eat_gps_status_get(duk_context *ctx) {
-  int res = eat_gps_status_get();
-  duk_push_number(ctx, res);
-  return 1;  // one return value 
-}
-
-static duk_ret_t my_eat_get_version(duk_context *ctx) {
-  const char * res = eat_get_version();
-  duk_push_string(ctx, res);
-  return 1;  // one return value 
-}
-*/
-
 /*require load*/
 duk_ret_t cb_resolve_module(duk_context *ctx) {
     /*
@@ -133,7 +107,7 @@ duk_ret_t cb_resolve_module(duk_context *ctx) {
     
     resolved_id=requested_id;
 
-    duk_eval_string(ctx, resolved_id);
+    duk_eval_string_noresult(ctx, resolved_id);
     return 1;  /*nrets*/
 }
 
@@ -163,7 +137,7 @@ int load_file(duk_context *ctx, char *filename) {
 
       return 1;
     }else{
-      eat_trace("unable to read file %s", filename);
+      eat_trace("unable to read file");
       return 0;
     }
 }
@@ -173,28 +147,58 @@ duk_ret_t cb_load_module(duk_context *ctx) {
     load_file(ctx, (char *)FILE_NAME);
     return 1;  /*nrets*/
 }
-/*
-duk_ret_t my_eat_timer_start(duk_context *ctx) {
-    EatTimer_enum id = (EatTimer_enum)duk_get_int(ctx, 0);
-    unsigned int period = duk_get_uint(ctx, 1);
-    eat_timer_start(id, period);
-    return 1; 
+
+static void eat_sms_new_message_cb(EatSmsNewMessageInd_st smsNewMessage)
+{
+  char strbuf[1024];
+  sprintf(strbuf, "if(typeof eat_sms_new_message_cb !== 'undefined'){eat_sms_new_message_cb(%d);}", smsNewMessage.index);
+  duk_eval_string_noresult(global_ctx, strbuf);
+  //  eat_read_sms(smsNewMessage.index, eat_sms_read_cb);
 }
 
-duk_ret_t my_eat_timer_stop(duk_context *ctx) {
-    EatTimer_enum id = (EatTimer_enum)duk_get_int(ctx, 0);
-    eat_timer_stop(id);
-    return 1;  
+static eat_sms_flash_message_cb(EatSmsReadCnf_st smsFlashMessage)
+{
+    u8 format = 0;
+
+    eat_trace("flash message.");
+    eat_get_sms_format(&format);
+    if(1 == format)//TEXTʽ
+    {
+        eat_trace("recv TEXT sms.");
+        eat_trace("msg=%s.",smsFlashMessage.data);
+        eat_trace("datetime=%s.",smsFlashMessage.datetime);
+        eat_trace("name=%s.",smsFlashMessage.name);
+        eat_trace("status=%d.",smsFlashMessage.status);
+        eat_trace("len=%d.",smsFlashMessage.len);
+        eat_trace("number=%s.",smsFlashMessage.number);
+    }
+    else//PDU
+    {
+        eat_trace("recv PDU sms.");
+        eat_trace("msg=%s",smsFlashMessage.data);
+        eat_trace("len=%d",smsFlashMessage.len);
+    }
 }
 
-duk_ret_t my_eat_gps_nmea_info_output(duk_context *ctx) {
-    int id = (EatTimer_enum)duk_get_int(ctx, 0);
-    eat_gps_nmea_info_output(id, gps_info_buf,NMEA_BUFF_SIZE);
-    duk_push_string(ctx, gps_info_buf);
-    return 1;  
+static void eat_sms_ready_cb(eat_bool result)
+{
+  char strbuf[1024];
+  sprintf(strbuf, "if(typeof eat_sms_ready_cb !== 'undefined'){eat_sms_ready_cb(%d);}", result);
+  duk_eval_string_noresult(global_ctx, strbuf);
 }
-*/
-//
+
+static void eat_sms_send_cb(eat_bool result)
+{
+  char strbuf[1024];
+  sprintf(strbuf, "if(typeof eat_sms_send_cb !== 'undefined'){eat_sms_send_cb(%d);}", result);
+  duk_eval_string_noresult(global_ctx, strbuf);
+}
+
+duk_ret_t _duk_sms_init(duk_context *ctx) {
+	duk_sms_init(eat_sms_new_message_cb, eat_sms_ready_cb, eat_sms_flash_message_cb, eat_sms_send_cb);
+	return 0;
+}
+
 
 static register_bindings2(duk_context *ctx){
   /* After initializing the Duktape heap or when creating a new
@@ -207,32 +211,12 @@ static register_bindings2(duk_context *ctx){
   duk_put_prop_string(ctx, -2, "load");
   duk_module_node_init(ctx);
 
+  duk_push_c_function(ctx, _duk_sms_init, 0);
+	duk_put_global_string(ctx, "duk_sms_init");
+
   register_bindings(ctx);
+  //duk_sms_init(eat_sms_new_message_cb, eat_sms_ready_cb, eat_sms_flash_message_cb, eat_sms_send_cb);
 
-  
-/*  
-  duk_push_c_function(ctx, my_eat_gps_power_req, 1);
-  duk_put_global_string(ctx, "eat_gps_power_req");
-  
-  duk_push_c_function(ctx, my_eat_get_version, 0);
-  duk_put_global_string(ctx, "eat_get_version");
-  
-  duk_push_c_function(ctx, my_eat_gps_power_status, 0);
-  duk_put_global_string(ctx, "eat_gps_power_status");
-  
-  duk_push_c_function(ctx, my_eat_gps_status_get, 0);
-  duk_put_global_string(ctx, "eat_gps_status_get");
-
-  duk_push_c_function(ctx, my_eat_timer_start, 2);
-  duk_put_global_string(ctx, "eat_timer_start");
-
-  duk_push_c_function(ctx, my_eat_timer_stop, 1);
-  duk_put_global_string(ctx, "eat_timer_stop");
-
-  duk_push_c_function(ctx, my_eat_gps_nmea_info_output, 1);
-  duk_put_global_string(ctx, "eat_gps_nmea_info_output");
-*/
-  
 }
 
 /********************************************************************
@@ -293,42 +277,6 @@ void app_func_ext1(void *data)
 
 
 
-/*
-//Register your functions e.g. into the global object:
-
-
-
-static duk_ret_t native_adder(duk_context *ctx) {
-  int i;
-  int n = duk_get_top(ctx);  // #args 
-  double res = 0.0;
-
-  for (i = 0; i < n; i++) {
-    res += duk_to_number(ctx, i);
-  }
-
-  duk_push_number(ctx, res);
-  return 1;  // one return value 
-}
-
-duk_push_c_function(ctx, native_print, 1); //1: nargs
-duk_put_global_string(ctx, "print");
-duk_push_c_function(ctx, native_adder, DUK_VARARGS);
-duk_put_global_string(ctx, "adder");
-
-//You can then call your function from Ecmascript code:
-
-duk_eval_string_noresult(ctx, "print('2+3=' + adder(2, 3));");
-*/
-
-int evalJs(char *code) {
-  //duk_eval_string(jsctx, code);
-  //ard
-  //eat_trace(code, (int) duk_get_int(jsctx, -1));
-  
-  return 0;
-}
-
 void event_register_handler(EatEvent_enum event, event_handler_func handler)
 { 
     EventHandlerTable[event] = handler;
@@ -364,53 +312,56 @@ static char * fixstr(char* buff, int len){
 
 void mdm_rx_proc(void)
 {
-   /*u8 buf[2048];
-    u8 buf2[1024];
-    int i,j=0;
-    char strbuf[2048];
-    u8 param1,param2;
-    u16 len = 0;
-    len = eat_modem_read(buf, 2048);
-    for(i=0;i<len;i++){
-      if(buf[0]=='\''){
-        buf[0]='_';
+  unsigned char buf[1024];
+  unsigned char buf2[100];
+  char *ptr=(char*)&buf;
+  int i=0,j=0;
+  char strbuf[200];
+  u16 len = 0;
+  len = eat_modem_read((unsigned char*)&buf, 1024);
+  if(len==0)
+    return;
+  while (*ptr) {
+    if(*ptr=='\'') *ptr='_';
+    if(*ptr=='\r' || (*(ptr+1)=='\0' && *ptr!='\n')){
+      strncpy((char *)&buf2,(const char *) ptr - i + j, i - j);
+      buf2[i-j]='\0';
+      if(strcmp(buf2, "SMS Ready")==0){
+        duk_sms_init(eat_sms_new_message_cb, eat_sms_ready_cb, eat_sms_flash_message_cb, eat_sms_send_cb);
       }
-      if(buf[0]=='\r'){
-        strncpy(&buf2,&buf, i-j);
-        sprintf(strbuf, "if(typeof modem_callback !== 'undefined'){ modem_callback('%s'); }", buf2 );
-        if(global_ctx!=0){
-          duk_eval_string(global_ctx, strbuf);
+
+      if(strlen(buf2)>0){
+        sprintf(strbuf, "if(typeof modem_callback !== 'undefined') modem_callback(\"%s\"); else eat_trace(\"%s\");", buf2, buf2 );
+        if(heap_init && 0){
+          duk_eval_string_noresult(global_ctx, strbuf);
         }else{
-          eat_trace(buf);
+          eat_trace("%s %d", buf2, eat_get_task_id());
         }
-        j=i+2;
       }
-      *buf++;
-    }*/
+      j=i+2;
+    }
+    i++;
+    ptr++;
+  }
 }
 
 static void uart_rx_proc(const EatEvent_st* event)
 {
     u16 len;
     EatUart_enum uart = event->data.uart.uart;
-
     len = eat_uart_read(uart, rx_buf, EAT_UART_RX_BUF_LEN_MAX);
-
-    if(len != 0)
-    {
-      rx_buf[len] = '\0';
-      eat_trace("> %s", rx_buf);
-
+    if(len != 0) {
+      if(rx_buf[len-1]=='\r')
+        rx_buf[len-1] = '\0';
+      else
+        rx_buf[len-2] = '\0';
+      eat_trace("< %s", rx_buf);
       duk_eval_string(global_ctx, rx_buf);
       if (duk_get_type(global_ctx, -1) == DUK_TYPE_NUMBER) {
-        eat_trace("%d", duk_get_int(global_ctx, -1));
+        eat_trace("> %d", duk_get_int(global_ctx, -1));
       }else{
-        eat_trace((char *)duk_get_string(global_ctx, -1));
-      }
-      
-        
-        //eat_uart_write(uart, rx_buf, len);
-        
+        eat_trace("> %s", (char *)duk_get_string(global_ctx, -1));
+      } 
     }
 }
 
@@ -429,15 +380,16 @@ static void my_fatal(void *udata, const char *msg) {
 
 void initHeap(){
   global_ctx = duk_create_heap(NULL, NULL, NULL, NULL, my_fatal);
-    eat_trace("heap created");
+  eat_trace("heap created");
 
-    register_bindings2(global_ctx);
+  register_bindings2(global_ctx);
 
-    if(load_file(global_ctx, (char *)INDEX_FILE)) {
-      eat_trace("index.js loaded");
-    }
+  if(load_file(global_ctx, (char *)INDEX_FILE)) {
+    eat_trace("index.js loaded");
+  }
 
-    duk_eval_string(global_ctx, "eat_trace('js is working!');");
+  duk_eval_string_noresult(global_ctx, "eat_trace('js is working!');");
+  
 }
 
 void app_main(void *data)
@@ -460,7 +412,11 @@ void app_main(void *data)
     if(app_para.is_update_app && app_para.update_app_result)
     {
         eat_update_app_ok();
+        eat_trace("------------update successfull-------------");
     }
+
+    eat_trace("booting: version:%s, build_time=%s %s. core(version:%s, buildno=%s, buildtime=%s)",
+            VERSION_STR, __DATE__, __TIME__, eat_get_version(), eat_get_buildno(), eat_get_buildtime());
 
     eat_trace(" app_main ENTRY");
     mem_ini_flag = eat_mem_init(app_dynamic_mem, sizeof(app_dynamic_mem));
@@ -474,7 +430,7 @@ void app_main(void *data)
 
     initHeap();
     
-    //duk_eval_string(global_ctx, "eat_trace( eat_get_version());");
+    //duk_eval_string_noresult(global_ctx, "eat_trace( eat_get_version());");
     //duk_destroy_heap(ctx);
 
 
@@ -491,7 +447,7 @@ void app_main(void *data)
     
     //jsctx = duk_create_heap_default();
     //register_bindings(jsctx);
-    
+    heap_init=1;
 
 
   
@@ -514,7 +470,7 @@ void app_main(void *data)
           sprintf(strbuf, "if(typeof event_callback !== 'undefined'){ event_callback({event:%d}); }", event.event );
         }
 
-        duk_eval_string(global_ctx, strbuf);
+        duk_eval_string_noresult(global_ctx, strbuf);
         //eat_trace("%s-%d:msg %x", __FILE__, __LINE__,event.event);
         func = EventHandlerTable[event.event];
         if(event.event < EAT_EVENT_NUM && func != NULL)

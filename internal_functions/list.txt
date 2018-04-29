@@ -1,0 +1,4 @@
+EatCregState_enum eat_network_get_creg()
+s32 eat_network_get_ber()
+s32 eat_network_get_csq()
+u8 at_network_get_cgatt()

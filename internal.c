@@ -11,8 +11,12 @@
 #include "eat_sms.h"
 
 #include "duktape.h"
+#include "mma8452.h"
+
+#include "log.h"
 
 duk_context *_ctx;
+duk_context *sms_ctx;
 
 wchar_t *ctow(const char *buf, wchar_t *output) {
   wchar_t *cr = output;
@@ -308,7 +312,7 @@ duk_ret_t _eat_network_get_cgatt(duk_context *ctx) {
 
 duk_ret_t _eat_modem_write(duk_context *ctx) {
 	const unsigned char *data = (const unsigned char*) duk_get_string(ctx, 0);
-	unsigned short len = (unsigned short) duk_get_int(ctx, 1);
+	unsigned short len = strlen(data);
 	unsigned short ret = eat_modem_write(data, len);
 	duk_push_int(ctx, ret);
 	return 1;
@@ -554,11 +558,11 @@ duk_ret_t _eat_fs_GetDiskSize(duk_context *ctx) {
 }
 
 duk_ret_t _eat_fs_Rename(duk_context *ctx) {
-  wchar_t wfname[2048];
-  wchar_t wfname2[2048];
+  wchar_t wfname[100];
+  wchar_t wfname2[100];
 	const WCHAR *FileName = (const WCHAR *) ctow(duk_get_string(ctx, 0), (wchar_t *)&wfname);
   const WCHAR *NewName = (const WCHAR *) ctow(duk_get_string(ctx, 1), (wchar_t *)&wfname2);
-	int ret = eat_fs_Rename(FileName, NewName);
+	int ret = eat_fs_Rename(wfname, wfname2);
 	duk_push_int(ctx, ret);
 	return 1;
 }
@@ -1308,24 +1312,29 @@ static void soc_notify_cb(s8 s,soc_event_enum event,eat_bool result, u16 ack_siz
   duk_eval_string_noresult(_ctx, strbuf);
 }
 
-static void eat_sms_new_message_cb(EatSmsNewMessageInd_st smsNewMessage)
-{
-  char strbuf[1024];
-  sprintf(strbuf, "if(typeof eat_sms_new_message_cb !== 'undefined'){eat_sms_new_message_cb(%d);}", smsNewMessage);
-  duk_eval_string_noresult(_ctx, strbuf);
-  //  eat_read_sms(smsNewMessage.index, eat_sms_read_cb);
-}
-
 static void eat_sms_read_cb(EatSmsReadCnf_st smsReadCnfContent)
 {
-  char strbuf[1024];
-  sprintf(strbuf, "if(typeof eat_sms_read_cb !== 'undefined'){eat_sms_read_cb(%s);}", smsReadCnfContent.data);
-  duk_eval_string_noresult(_ctx, strbuf);
+  char * strbuf=eat_mem_alloc(1200);
+  eat_trace("eat_sms_read_cb, msg=%s",smsReadCnfContent.data);
+  eat_trace("eat_sms_read_cb, datetime=%s",smsReadCnfContent.datetime);
+  eat_trace("eat_sms_read_cb, name=%s",smsReadCnfContent.name);
+  eat_trace("eat_sms_read_cb, status=%d",smsReadCnfContent.status);
+  eat_trace("eat_sms_read_cb, len=%d",smsReadCnfContent.len);
+  eat_trace("eat_sms_read_cb, number=%s",smsReadCnfContent.number);
+//log_hex((const char *)&smsReadCnfContent,1024);
+ 
+  sprintf(strbuf, "if(typeof eat_sms_read_cb !== 'undefined'){eat_sms_read_cb({name: '%s', datetime: '%s', message:'%s', number:'%s', status:%d, len:%d});}", 
+          smsReadCnfContent.name, smsReadCnfContent.datetime, smsReadCnfContent.data, smsReadCnfContent.number, smsReadCnfContent.status,smsReadCnfContent.len);
+  duk_eval_string_noresult(sms_ctx, strbuf);
+  eat_mem_free(strbuf);
+  
 }
 
-duk_ret_t _eat_read_sms(duk_context *ctx) {
+duk_ret_t _eat_sms_read(duk_context *ctx) {
 	int index = (int) duk_get_int(ctx, 0);
-	s8 ret = eat_read_sms(index, eat_sms_read_cb);
+	s8 ret;
+  sms_ctx=ctx;
+  ret = eat_read_sms(index, eat_sms_read_cb);
 	duk_push_int(ctx, ret);
 	return 1;
 }
@@ -1339,24 +1348,56 @@ duk_ret_t _eat_send_text_sms(duk_context *ctx) {
 	return 1;
 }
 
-static void eat_ftp_get(const char *server, const char *port, const char *username, const char *password, const char *filename,const char *localpath){
-  static char buff[1024]={0};
-  
+duk_ret_t _eat_set_sms_sc(duk_context *ctx) {
+	const char * number = duk_get_string(ctx, 0);
+	s8 ret = eat_set_sms_sc((u8*)number);
+	duk_push_int(ctx, ret);
+	return 1;
+}
+
+
+
+
+
+static void eat_ftp_close(){
+  eat_modem_write("AT+SAPBR=0,1\r\n", strlen("AT+SAPBR=0,1\r\n"));
+}
+
+static void eat_ftp_init(const char *apn, const char *username, const char *password){
+  static char buff[500]={0};
+  eat_modem_write("AT+SAPBR=3,1,CONTYPE,GPRS\r\n", strlen("AT+SAPBR=3,1,CONTYPE,GPRS\r\n"));
+  eat_sleep(500);
+  sprintf(buff,"AT+SAPBR=3,1,APN,\"%s\"\r\n", apn);
+  eat_modem_write(buff, strlen(buff));
+  eat_sleep(500);
+  sprintf(buff,"AT+SAPBR=3,1,USER,\"%s\"\r\n", username);
+  eat_modem_write(buff, strlen(buff));
+  eat_sleep(500);
+  sprintf(buff,"AT+SAPBR=3,1,PWD,\"%s\"\r\n", password);
+  eat_modem_write(buff, strlen(buff));
+  eat_sleep(500);
+  eat_modem_write("AT+SAPBR=1,1\r\n", strlen("AT+SAPBR=1,1\r\n"));
+  eat_sleep(500);
+  eat_modem_write("AT+SAPBR=2,1\r\n", strlen("AT+SAPBR=2,1\r\n"));
+}
+
+static void eat_ftp_get(const char *server, const char *port, const char *username, const char *password, const char *filename,const char *localpath, u8 sd){
+  static char buff[500]={0};
   eat_modem_write("AT+FTPCID=1\r\n", strlen("AT+FTPCID=1\r\n"));
   eat_sleep(500);
-  sprintf(buff,"AT+FTPUN=%s\r\n", username);
+  sprintf(buff,"AT+FTPUN=\"%s\"\r\n", username);
   eat_modem_write(buff, strlen(buff));
   eat_sleep(500);
-  sprintf(buff,"AT+FTPPW=%s\r\n", password);
+  sprintf(buff,"AT+FTPPW=\"%s\"\r\n", password);
   eat_modem_write(buff, strlen(buff));
   eat_sleep(500);
-  sprintf(buff,"AT+FTPGETNAME=%s\r\n", filename);
+  sprintf(buff,"AT+FTPGETNAME=\"%s\"\r\n", filename);
   eat_modem_write(buff, strlen(buff));
   eat_sleep(500);
-  sprintf(buff,"AT+FTPGETPATH=%s\r\n", localpath);
+  sprintf(buff,"AT+FTPGETPATH=\"%s\"\r\n", localpath);
   eat_modem_write(buff, strlen(buff));
   eat_sleep(500);
-  sprintf(buff,"AT+FTPSERV=%s\r\n", server);
+  sprintf(buff,"AT+FTPSERV=\"%s\"\r\n", server);
   eat_modem_write(buff, strlen(buff));
   eat_sleep(500);
   sprintf(buff,"AT+FTPPORT=%s\r\n", port);
@@ -1364,7 +1405,17 @@ static void eat_ftp_get(const char *server, const char *port, const char *userna
   eat_sleep(500);
   eat_modem_write("AT+FTPTIMEOUT=3\r\n", strlen("AT+FTPTIMEOUT=3\r\n"));
   eat_sleep(500);
-  eat_modem_write("AT+FTPGETTOFS=0\r\n", strlen("AT+FTPGETTOFS=0\r\n"));
+  sprintf(buff,"AT+FTPGETTOFS=%d,\"%s\"\r\n", sd, filename);
+  eat_modem_write(buff, strlen(buff));
+  eat_sleep(500);
+}
+
+duk_ret_t _eat_ftp_init(duk_context *ctx) {
+  const char *apn  = duk_get_string(ctx, 0);
+  const char *username = duk_get_string(ctx, 1); 
+  const char *password = duk_get_string(ctx, 2); 
+	eat_ftp_init(apn, username, password);
+	return 0;
 }
 
 duk_ret_t _eat_ftp_get(duk_context *ctx) {
@@ -1374,9 +1425,17 @@ duk_ret_t _eat_ftp_get(duk_context *ctx) {
   const char *password = duk_get_string(ctx, 3); 
   const char *filename = duk_get_string(ctx, 4);
   const char *localpath = duk_get_string(ctx, 5);
-	eat_ftp_get(server, port, username, password, filename, localpath);
-	return 1;
+  const u8 sd = duk_get_int(ctx, 6);
+	eat_ftp_get(server, port, username, password, filename, localpath, sd);
+	return 0;
 }
+
+duk_ret_t _eat_ftp_close(duk_context *ctx) {
+	eat_ftp_close();
+	return 0;
+}
+
+
 
 static u8 eat_upgrade_app(const char *fileName){
   u8 *data;
@@ -1432,56 +1491,101 @@ duk_ret_t _eat_upgrade_app(duk_context *ctx) {
 	return 1;
 }
 
-static void eat_sms_ready_cb(eat_bool result)
-{
-  char strbuf[1024];
-  sprintf(strbuf, "if(typeof eat_sms_ready_cb !== 'undefined'){eat_sms_ready_cb(%d);}", result);
-  duk_eval_string_noresult(_ctx, strbuf);
-}
 
-static eat_sms_flash_message_cb(EatSmsReadCnf_st smsFlashMessage)
-{
-    u8 format = 0;
 
-    eat_trace("flash message.");
-    eat_get_sms_format(&format);
-    if(1 == format)//TEXTʽ
-    {
-        eat_trace("recv TEXT sms.");
-        eat_trace("msg=%s.",smsFlashMessage.data);
-        eat_trace("datetime=%s.",smsFlashMessage.datetime);
-        eat_trace("name=%s.",smsFlashMessage.name);
-        eat_trace("status=%d.",smsFlashMessage.status);
-        eat_trace("len=%d.",smsFlashMessage.len);
-        eat_trace("number=%s.",smsFlashMessage.number);
-    }
-    else//PDU
-    {
-        eat_trace("recv PDU sms.");
-        eat_trace("msg=%s",smsFlashMessage.data);
-        eat_trace("len=%d",smsFlashMessage.len);
-    }
-}
 
-static void eat_sms_send_cb(eat_bool result)
-{
-  char strbuf[1024];
-  sprintf(strbuf, "if(typeof eat_sms_send_cb !== 'undefined'){eat_sms_send_cb(%d);}", result);
-  duk_eval_string_noresult(_ctx, strbuf);
-}
 
-duk_ret_t _eat_sms_init(duk_context *ctx) {
+
+void duk_sms_init(Sms_New_Message_Ind eat_sms_new_message_cb, Sms_Ready_Ind eat_sms_ready_cb, 
+                  Sms_Flash_Message_Ind eat_sms_flash_message_cb, Sms_Send_Completed eat_sms_send_cb ) {
 	eat_set_sms_operation_mode(EAT_TRUE); //set sms operation as API mode
-  eat_set_sms_format(EAT_TRUE);//set sms format as TEXT mode
-  //eat_set_sms_cnmi(0,0,0,0,0);//set sms cnmi parameter
-  //eat_set_sms_sc("+8613800290500");//set center number
-  //eat_set_sms_storage(EAT_ME, EAT_ME, EAT_ME);//set sms storage type
+  eat_set_sms_format(EAT_TRUE); //set sms format as TEXT mode
+  eat_set_sms_cnmi(2,1,0,0,0); //set sms cnmi parameter
+  eat_set_sms_sc("+447797704000"); //set center number
+  eat_set_sms_storage(EAT_ME, EAT_ME, EAT_ME); //set sms storage type
   eat_sms_register_new_message_callback(eat_sms_new_message_cb);
   eat_sms_register_sms_ready_callback(eat_sms_ready_cb);
   eat_sms_register_flash_message_callback(eat_sms_flash_message_cb);
   eat_sms_register_send_completed_callback(eat_sms_send_cb);
-	return 0;
+  eat_trace("sms init done");
 }
+
+
+duk_ret_t _eat_bt_power(duk_context *ctx) {
+  static char buff[15]={0};
+  s8 ret;
+	const u8 pwr = duk_get_int(ctx, 0);
+  sprintf(buff,"AT+BTPOWER=%d\r\n", pwr);
+  ret = eat_modem_write(buff, strlen(buff));
+	duk_push_int(ctx, ret);
+	return 1;
+}
+
+duk_ret_t _eat_bt_spp_write(duk_context *ctx) {
+	const char * buff = duk_get_string(ctx, 0);
+  s8 ret;
+  eat_modem_write("AT+BTSPPSEND\r\n", strlen("AT+BTSPPSEND\r\n"));
+  eat_modem_write(buff, strlen(buff));
+  ret = eat_modem_write("\x1b", 1); //ESC char
+	duk_push_int(ctx, ret);
+	return 1;
+}
+
+duk_ret_t _eat_mma_init(duk_context *ctx) {
+	s8 ret = mma8452_init();
+	duk_push_int(ctx, ret);
+	return 1;
+}
+
+duk_ret_t _eat_mma_config(duk_context *ctx) {
+  const u8 scale = duk_get_int(ctx, 0);
+  const u8 datarate = duk_get_int(ctx, 1);
+	u8 ret = mma8452_config(scale, datarate);
+	duk_push_int(ctx, ret);
+	return 1;
+}
+
+duk_ret_t _eat_mma_read(duk_context *ctx) {
+  duk_idx_t obj_idx;
+  float accel[3]={0};  // Stores the 12-bit signed value
+  //int rotaccel[3]={0};  // Stores the 12-bit signed value
+  int accelCount[3];  // Stores the 12-bit signed value
+  float accelG[3];
+  int i,j;
+  const u8 scale = duk_get_int(ctx, 0);
+
+  //facciamo la media di 6 samples presi a 50ms
+  for(i=0;i<6;i++){
+      mma8452_read_accel(&accelCount[0]);
+      for ( j=0; j<3; j++)
+          accel[j]+=accelCount[j]/6;
+      eat_sleep(50);
+  }
+  //rotate(&accel[0],&rotaccel[0]);
+  
+  for ( i=0; i<3; i++)
+    accelG[i] = (float) accel[i]/((1<<12)/(2 * scale));  // get actual g value, this depends on scale being set
+
+  eat_trace("eat_mma_read X:%f Y:%f Z:%f",accelG[0],accelG[1],accelG[2]);
+
+  obj_idx = duk_push_object(ctx);
+  duk_push_number(ctx, accelG[0]);
+  duk_put_prop_string(ctx, obj_idx, "x");
+  duk_push_number(ctx, accelG[1]);
+  duk_put_prop_string(ctx, obj_idx, "y");
+  duk_push_number(ctx, accelG[2]);
+  duk_put_prop_string(ctx, obj_idx, "z");
+	return 1;
+}
+
+duk_ret_t _eat_mma_read_byte(duk_context *ctx) {
+  const u8 address = duk_get_int(ctx, 0);
+  uint8_t ret = 0;
+	mma8452_i2c_register_read(address, &ret, 1);
+	duk_push_int(ctx, ret);
+	return 1;
+}
+
 
 
 register_bindings(duk_context *ctx){
@@ -1489,20 +1593,44 @@ register_bindings(duk_context *ctx){
 
   eat_soc_notify_register(soc_notify_cb);
 
+  duk_push_c_function(ctx, _eat_mma_config, 2);
+  duk_put_global_string(ctx, "eat_mma_config");
+
+  duk_push_c_function(ctx, _eat_mma_init, 1);
+  duk_put_global_string(ctx, "eat_mma_init");
+
+  duk_push_c_function(ctx, _eat_mma_read_byte, 1);
+  duk_put_global_string(ctx, "eat_mma_read_byte");
+
+  duk_push_c_function(ctx, _eat_mma_read, 1);
+  duk_put_global_string(ctx, "eat_mma_read");
+
   duk_push_c_function(ctx, _eat_trace, DUK_VARARGS);
   duk_put_global_string(ctx, "eat_trace");
 
-  duk_push_c_function(ctx, _eat_ftp_get, 6);
+  duk_push_c_function(ctx, _eat_set_sms_sc, 1);
+  duk_put_global_string(ctx, "eat_set_sms_sc");
+
+  duk_push_c_function(ctx, _eat_bt_power, 1);
+  duk_put_global_string(ctx, "eat_bt_power");
+
+  duk_push_c_function(ctx, _eat_bt_spp_write, 1);
+  duk_put_global_string(ctx, "eat_bt_spp_write");
+
+  duk_push_c_function(ctx, _eat_ftp_init, 3);
+  duk_put_global_string(ctx, "eat_ftp_init");
+
+  duk_push_c_function(ctx, _eat_ftp_get, 7);
   duk_put_global_string(ctx, "eat_ftp_get");
 
-  duk_push_c_function(ctx, _eat_read_sms, 1);
-  duk_put_global_string(ctx, "eat_read_sms");
+  duk_push_c_function(ctx, _eat_ftp_close, 0);
+  duk_put_global_string(ctx, "eat_ftp_close");
+
+  duk_push_c_function(ctx, _eat_sms_read, 1);
+  duk_put_global_string(ctx, "eat_sms_read");
 
   duk_push_c_function(ctx, _eat_upgrade_app, 1);
   duk_put_global_string(ctx, "eat_upgrade_app");
-
-  duk_push_c_function(ctx, _eat_sms_init, 4);
-	duk_put_global_string(ctx, "eat_sms_init");
 
   duk_push_c_function(ctx, _eat_send_text_sms, 2);
 	duk_put_global_string(ctx, "eat_send_text_sms");
@@ -1678,7 +1806,7 @@ register_bindings(duk_context *ctx){
 	duk_push_c_function(ctx, _eat_network_get_cgatt, 0);
 	duk_put_global_string(ctx, "eat_network_get_cgatt");
 
-	duk_push_c_function(ctx, _eat_modem_write, 2);
+	duk_push_c_function(ctx, _eat_modem_write, 1);
 	duk_put_global_string(ctx, "eat_modem_write");
 
 	duk_push_c_function(ctx, _eat_modem_read, 2);

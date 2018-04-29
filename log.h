@@ -1,0 +1,1 @@
+void log_hex(const char* data, int length);
