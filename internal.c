@@ -14,6 +14,7 @@
 #include "mma8452.h"
 
 #include "log.h"
+#include "crash.h"
 
 duk_context *_ctx;
 duk_context *sms_ctx;
@@ -359,11 +360,64 @@ duk_ret_t _eat_gps_start_mode_set(duk_context *ctx) {
 }
 
 duk_ret_t _eat_gps_nmea_info_output(duk_context *ctx) {
+  /*
+  * the output format of eat_gps_nmea_info_output
+  * $GPSIM,<latitude>,<longitude>,<altitude>,<UTCtime>,<TTFF>,<num>,<speed>,<course>
+  * note:
+        <TTFF>:time to first fix(in seconds)
+        <num> :satellites in view for fix
+  * example:$GPSIM,114.5,30.15,28.5,1461235600.123,3355,7,2.16,179.36
+  */
   char infobuf[2048]={0};
   u32 size = 2048;
-	EatGpsNmeaOutput mode = (EatGpsNmeaOutput) duk_get_int(ctx, 0);
-	eat_bool ret = eat_gps_nmea_info_output(mode, (char*)&infobuf, size);
-	duk_push_string(ctx, infobuf);
+	u8 mode = duk_get_int(ctx, 0);
+	eat_bool ret = eat_gps_nmea_info_output((EatGpsNmeaOutput)mode, &infobuf[0], size);
+  duk_push_string(ctx, infobuf);
+	return 1;
+}
+
+duk_ret_t _eat_gps_get(duk_context *ctx) {
+  /*
+  * the output format of eat_gps_nmea_info_output
+  * $GPSIM,<latitude>,<longitude>,<altitude>,<UTCtime>,<TTFF>,<num>,<speed>,<course>
+  * note:
+        <TTFF>:time to first fix(in seconds)
+        <num> :satellites in view for fix
+  * example:$GPSIM,114.5,30.15,28.5,1461235600.123,3355,7,2.16,179.36
+  * $GPSIM,41.848476,12.437464,81.704000,20180430114952.000,0,9,0.000000,171.070007
+
+  */
+  float lat,lon,alt,utc,speed,course;
+  int ttf,num;
+  char infobuf[2048]={0};
+  duk_idx_t obj_idx;
+  u32 size = 2048;
+	eat_bool ret = eat_gps_nmea_info_output(0, &infobuf[0], size);
+  if(ret){
+    sscanf((const char *)infobuf, "$GPSIM,%f,%f,%f,%f,%d,%d,%f,%f",
+      &lat, &lon, &alt, &utc, &ttf, &num, &speed, &course);
+  }
+  
+  eat_trace("lat: %f", lat);
+
+  obj_idx = duk_push_object(ctx);
+  duk_push_number(ctx, lat);
+  duk_put_prop_string(ctx, obj_idx, "lat");
+  duk_push_number(ctx, lon);
+  duk_put_prop_string(ctx, obj_idx, "lon");
+  duk_push_number(ctx, alt);
+  duk_put_prop_string(ctx, obj_idx, "alt");
+  duk_push_number(ctx, utc);
+  duk_put_prop_string(ctx, obj_idx, "utc");
+  duk_push_number(ctx, course);
+  duk_put_prop_string(ctx, obj_idx, "course");
+  duk_push_number(ctx, ttf);
+  duk_put_prop_string(ctx, obj_idx, "ttf");
+  duk_push_number(ctx, num);
+  duk_put_prop_string(ctx, obj_idx, "num");
+  duk_push_number(ctx, speed);
+  duk_put_prop_string(ctx, obj_idx, "speed");
+
 	return 1;
 }
 
@@ -1521,12 +1575,92 @@ duk_ret_t _eat_bt_power(duk_context *ctx) {
 	return 1;
 }
 
-duk_ret_t _eat_bt_spp_write(duk_context *ctx) {
-	const char * buff = duk_get_string(ctx, 0);
+duk_ret_t _eat_bt_scan(duk_context *ctx) {
   s8 ret;
-  eat_modem_write("AT+BTSPPSEND\r\n", strlen("AT+BTSPPSEND\r\n"));
-  eat_modem_write(buff, strlen(buff));
-  ret = eat_modem_write("\x1b", 1); //ESC char
+  ret = eat_modem_write("AT+BTSCAN=1\r",strlen("AT+BTSCAN=1\r")); 
+	duk_push_int(ctx, ret);
+	return 1;
+}
+
+duk_ret_t _eat_bt_pair(duk_context *ctx) {
+  s8 ret;
+  static char buff[15]={0};
+  const char *mode = duk_get_string(ctx, 0);
+  const char *data = duk_get_string(ctx, 1);
+  sprintf(buff,"AT+BTPAIR=%s,%s\r\n", mode, data);
+  ret = eat_modem_write(buff, strlen(buff));
+	duk_push_int(ctx, ret);
+	return 1;
+}
+
+s8 eat_bt_spp_accept(u8 id) {
+  static char buff[15]={0};
+  sprintf(buff,"AT+BTACPT=%d\r\n", id);
+  return eat_modem_write(buff, strlen(buff));
+}
+
+duk_ret_t _eat_bt_spp_accept(duk_context *ctx) {
+	const u8 id = duk_get_int(ctx, 0);
+  s8 ret = eat_bt_spp_accept(id);
+	duk_push_int(ctx, ret);
+	return 1;
+}
+
+s8 eat_bt_file_accept(u8 sd) {
+  static char buff[15]={0};
+  sprintf(buff,"AT+BTOPPACPT=1,%d\r\n", sd);
+  return eat_modem_write(buff, strlen(buff));
+}
+
+s8 eat_bt_file_send(u8 id, char *filename) {
+  static char buff[50]={0};
+  sprintf(buff,"AT+BTOPPPUSH=%d,%s\r\n", id, filename);
+  return eat_modem_write(buff, strlen(buff));
+}
+
+duk_ret_t _eat_bt_file_accept(duk_context *ctx) {
+  s8 ret;
+  const u8 id = duk_get_int(ctx, 0);
+  ret = eat_bt_file_accept(id);
+	duk_push_int(ctx, ret);
+	return 1;
+}
+
+duk_ret_t _eat_bt_file_send(duk_context *ctx) {
+  s8 ret;
+  const u8 id = duk_get_int(ctx, 0);
+  const char *filename = duk_get_string(ctx, 1);
+  ret = eat_bt_file_send(id, (char*)filename);
+	duk_push_int(ctx, ret);
+	return 1;
+}
+
+
+duk_ret_t _eat_bt_spp_config(duk_context *ctx) {
+  static char buff[100]={0};
+  s8 ret;
+  const char *cmd = duk_get_string(ctx, 0);
+	const u8 id = duk_get_int(ctx, 1);
+  sprintf(buff,"AT+BTSPPCFG=%s,%d\r\n", cmd, id);
+  ret = eat_modem_write(buff, strlen(buff));
+	duk_push_int(ctx, ret);
+	return 1;
+}
+
+s8 eat_bt_spp_write(u8 id, char *data) {
+	static char buff[500]={0};
+  s8 ret;
+  sprintf(buff,"AT+BTSPPSEND=%d,%d\r\n", id, strlen(data));
+  ret = eat_modem_write(buff, strlen(buff));
+  ret = eat_modem_write(data, strlen(data));
+	return strlen(data);
+}
+
+duk_ret_t _eat_bt_spp_write(duk_context *ctx) {
+  s8 ret;
+  const u8 id = duk_get_int(ctx, 0);
+  const char *data = duk_get_string(ctx, 1);
+  ret = eat_bt_spp_write(id, (char*)data);
 	duk_push_int(ctx, ret);
 	return 1;
 }
@@ -1545,14 +1679,11 @@ duk_ret_t _eat_mma_config(duk_context *ctx) {
 	return 1;
 }
 
-duk_ret_t _eat_mma_read(duk_context *ctx) {
-  duk_idx_t obj_idx;
-  float accel[3]={0};  // Stores the 12-bit signed value
+u8 eat_mma_read(u8 scale, float *accelG){
+  int accel[3]={0};  // Stores the 12-bit signed value
   //int rotaccel[3]={0};  // Stores the 12-bit signed value
   int accelCount[3];  // Stores the 12-bit signed value
-  float accelG[3];
   int i,j;
-  const u8 scale = duk_get_int(ctx, 0);
 
   //facciamo la media di 6 samples presi a 50ms
   for(i=0;i<6;i++){
@@ -1566,6 +1697,20 @@ duk_ret_t _eat_mma_read(duk_context *ctx) {
   for ( i=0; i<3; i++)
     accelG[i] = (float) accel[i]/((1<<12)/(2 * scale));  // get actual g value, this depends on scale being set
 
+  return 1;
+  
+}
+
+duk_ret_t _eat_mma_read(duk_context *ctx) {
+  duk_idx_t obj_idx;
+  float rot[3]={0};
+  float accelG[3]={0};
+  const u8 scale = duk_get_int(ctx, 0);
+  eat_mma_read(scale, &rot[0]);
+
+  //rotate
+  eat_acc_rotate(&rot[0], &accelG[0]);
+
   eat_trace("eat_mma_read X:%f Y:%f Z:%f",accelG[0],accelG[1],accelG[2]);
 
   obj_idx = duk_push_object(ctx);
@@ -1578,14 +1723,13 @@ duk_ret_t _eat_mma_read(duk_context *ctx) {
 	return 1;
 }
 
-duk_ret_t _eat_mma_read_byte(duk_context *ctx) {
-  const u8 address = duk_get_int(ctx, 0);
-  uint8_t ret = 0;
-	mma8452_i2c_register_read(address, &ret, 1);
+duk_ret_t _eat_cal_static(duk_context *ctx) {
+  duk_idx_t obj_idx;
+  const u8 scale = duk_get_int(ctx, 0);
+  u8 ret = eat_cal_static(scale);
 	duk_push_int(ctx, ret);
 	return 1;
 }
-
 
 
 register_bindings(duk_context *ctx){
@@ -1593,14 +1737,14 @@ register_bindings(duk_context *ctx){
 
   eat_soc_notify_register(soc_notify_cb);
 
+  duk_push_c_function(ctx, _eat_cal_static, 2);
+  duk_put_global_string(ctx, "eat_cal_static");
+
   duk_push_c_function(ctx, _eat_mma_config, 2);
   duk_put_global_string(ctx, "eat_mma_config");
 
   duk_push_c_function(ctx, _eat_mma_init, 1);
   duk_put_global_string(ctx, "eat_mma_init");
-
-  duk_push_c_function(ctx, _eat_mma_read_byte, 1);
-  duk_put_global_string(ctx, "eat_mma_read_byte");
 
   duk_push_c_function(ctx, _eat_mma_read, 1);
   duk_put_global_string(ctx, "eat_mma_read");
@@ -1614,7 +1758,25 @@ register_bindings(duk_context *ctx){
   duk_push_c_function(ctx, _eat_bt_power, 1);
   duk_put_global_string(ctx, "eat_bt_power");
 
-  duk_push_c_function(ctx, _eat_bt_spp_write, 1);
+  duk_push_c_function(ctx, _eat_bt_scan, 1);
+  duk_put_global_string(ctx, "eat_bt_scan");
+
+  duk_push_c_function(ctx, _eat_bt_pair, 2);
+  duk_put_global_string(ctx, "eat_bt_pair");
+
+  duk_push_c_function(ctx, _eat_bt_spp_accept, 1);
+  duk_put_global_string(ctx, "eat_bt_spp_accept");
+
+  duk_push_c_function(ctx, _eat_bt_file_send, 2);
+  duk_put_global_string(ctx, "eat_bt_file_send");
+
+  duk_push_c_function(ctx, _eat_bt_file_accept, 1);
+  duk_put_global_string(ctx, "eat_bt_file_accept");
+
+  duk_push_c_function(ctx, _eat_bt_spp_config, 2);
+  duk_put_global_string(ctx, "eat_bt_spp_config");
+
+  duk_push_c_function(ctx, _eat_bt_spp_write, 2);
   duk_put_global_string(ctx, "eat_bt_spp_write");
 
   duk_push_c_function(ctx, _eat_ftp_init, 3);
@@ -1829,6 +1991,9 @@ register_bindings(duk_context *ctx){
 
 	duk_push_c_function(ctx, _eat_gps_nmea_info_output, 3);
 	duk_put_global_string(ctx, "eat_gps_nmea_info_output");
+
+  duk_push_c_function(ctx, _eat_gps_get, 0);
+	duk_put_global_string(ctx, "eat_gps_get");
 
 	duk_push_c_function(ctx, _eat_gps_sleep_set, 1);
 	duk_put_global_string(ctx, "eat_gps_sleep_set");

@@ -57,6 +57,9 @@ u8 heap_init=0;
 #define INDEX_FILE L"D:\\index.js"
 #define NMEA_BUFF_SIZE 1024
 #define VERSION_STR "sim868_duktape v0.0.1"
+
+#define EAT_TIMER_GPS EAT_TIMER_16
+#define EAT_TIMER_ACC EAT_TIMER_15
 /********************************************************************
  * Types
  ********************************************************************/
@@ -76,6 +79,8 @@ static u8 rx_buf[EAT_UART_RX_BUF_LEN_MAX + 1] = {0};
 static u16 wr_uart_offset = 0; //用来标记uart未写完的数据
 static u16 wr_uart_len = 0; //下次需要往串口写的数据长度
 static char gps_info_buf[NMEA_BUFF_SIZE]="";
+
+static char spp_buffer[500]={0};
 //static duk_context *jsctx;
 /********************************************************************
  * External Functions declaration
@@ -270,8 +275,6 @@ void app_func_ext1(void *data)
   eat_uart_set_at_port(EAT_UART_USB);// UART1 is as AT PORT
   //eat_modem_set_poweron_urc_dir(EAT_USER_0);
 
- 
-  
 }
 
 
@@ -282,43 +285,56 @@ void event_register_handler(EatEvent_enum event, event_handler_func handler)
     EventHandlerTable[event] = handler;
 }
 
-eat_bool eat_modem_data_parse(u8* buffer, u16 len, u8* param1, u8* param2)
-{
-    eat_bool ret_val = EAT_FALSE;
-    u8* buf_ptr = NULL;
-    /*param:%d,extern_param:%d*/
-    buf_ptr = (u8*)strstr((const char *)buffer,"param");
-    if( buf_ptr != NULL)
-    {
-        sscanf((const char *)buf_ptr, "param:%d,extern_param:%d",(int*)param1, (int*)param2);
-        eat_trace("data parse param1:%d param2:%d",*param1, *param2);
-        ret_val = EAT_TRUE;
-    }
-    return ret_val;
-}
 
-//Read data from Modem
 
-static char * fixstr(char* buff, int len){
-  int i;
-  for(i=0;i<len;i++){
-    if(buff[i]=='\r' || buff[i]=='\n' || buff[i]=='\''){
-      buff[i]='_';
-    }
+static void exec_js(char *data, u8 cid){
+  char buff[100]={0};
+  sprintf(buff, "< %s", data);
+  eat_trace(buff);
+  if(cid) eat_bt_spp_write(cid, buff);
+  duk_eval_string(global_ctx, data);
+  if (duk_get_type(global_ctx, -1) == DUK_TYPE_NUMBER) {
+    sprintf(buff, "> %d", duk_get_int(global_ctx, -1));
+  }else if (duk_get_type(global_ctx, -1) == DUK_TYPE_STRING) {
+    sprintf(buff, "> %s", (char *)duk_get_string(global_ctx, -1));
   }
-  return buff;
+  eat_trace(buff);
+  if(cid) eat_bt_spp_write(cid, buff);
 }
 
-
-void mdm_rx_proc(void)
+void modem_rx_proc(void)
 {
-  unsigned char buf[1024];
-  unsigned char buf2[100];
+  unsigned char buf[1024]={0};
+  unsigned char buf2[100]={0};
   char *ptr=(char*)&buf;
+  char *ptr2;
   int i=0,j=0;
+  u8 cid=0;
   char strbuf[200];
   u16 len = 0;
   len = eat_modem_read((unsigned char*)&buf, 1024);
+
+  //+BTSPPDATA: 3,2,te
+  ptr2=strstr((const char *)&buf,"+BTSPPDATA:");
+  if(ptr2){
+    i=sscanf((const char *)buf + (ptr2-ptr), "+BTSPPDATA: %d,%d,%s", &cid, &len, &buf2);
+    eat_trace("BTSPPDATA cid:%d ,len:%d ,buf2:%s",cid,len,buf2);
+    ptr=ptr2;
+    ptr+=16+len;
+    if(*(ptr-1)=='\r'){
+      spp_buffer[0]='\0';
+      eat_bt_spp_write(cid, "\r\n");
+      exec_js( spp_buffer, cid);
+    }else{
+      eat_bt_spp_write(cid, buf2);
+      strcat((char*)&spp_buffer, (char*)&buf2);
+    }
+  }
+  ptr2=strstr((const char *)&buf,"+BTCONNECTING:");
+  if(ptr2){
+    eat_bt_spp_accept(1);
+  }
+
   if(len==0)
     return;
   while (*ptr) {
@@ -345,6 +361,8 @@ void mdm_rx_proc(void)
   }
 }
 
+
+
 static void uart_rx_proc(const EatEvent_st* event)
 {
     u16 len;
@@ -355,13 +373,7 @@ static void uart_rx_proc(const EatEvent_st* event)
         rx_buf[len-1] = '\0';
       else
         rx_buf[len-2] = '\0';
-      eat_trace("< %s", rx_buf);
-      duk_eval_string(global_ctx, rx_buf);
-      if (duk_get_type(global_ctx, -1) == DUK_TYPE_NUMBER) {
-        eat_trace("> %d", duk_get_int(global_ctx, -1));
-      }else{
-        eat_trace("> %s", (char *)duk_get_string(global_ctx, -1));
-      } 
+      exec_js(rx_buf, 0);
     }
 }
 
@@ -436,7 +448,7 @@ void app_main(void *data)
 
     //event_register_handler(EAT_EVENT_TIMER, timer_proc);
     //event_register_handler(EAT_EVENT_KEY, key_proc);
-    event_register_handler(EAT_EVENT_MDM_READY_RD, (event_handler_func)mdm_rx_proc);
+    event_register_handler(EAT_EVENT_MDM_READY_RD, (event_handler_func)modem_rx_proc);
     //event_register_handler(EAT_EVENT_MDM_READY_WR, mdm_tx_proc);
     //event_register_handler(EAT_EVENT_INT, int_proc);
     event_register_handler(EAT_EVENT_UART_READY_RD, uart_rx_proc);
@@ -449,8 +461,15 @@ void app_main(void *data)
     //register_bindings(jsctx);
     heap_init=1;
 
+    //init bluetooth
+    eat_modem_write("AT+BTPOWER=1\r\nAT+BTSPPCFG=MC,1\r\n",strlen("AT+BTPOWER=1\r\nAT+BTSPPCFG=MC,1\r\n"));
 
-  
+
+/*
+    eat_timer_start(EAT_TIMER_ACC, 50);
+    eat_timer_start(EAT_TIMER_GPS, 1000);
+*/
+
     while(EAT_TRUE)
     {
         eat_get_event(&event);

@@ -9,6 +9,30 @@
 #include "mma8452.h"
 #include "log.h"
 
+/*
+
+void MMA8452Reset() 
+{
+writeRegister(CTRL_REG2, 0x40); // set reset bit to 1 to assert software reset to zero at end of boot process
+}
+
+// Allow user compensation of acceleration errors
+void MMA8452Offsets()
+{
+   MMA8452Standby();  // Must be in standby to change registers
+   
+   // Factory settings are pretty good; the settings below produce 1 mg error or less at 2 g full scale! For the device at rest on my table 
+   // these values partially compensate for the slope of the table and the slope of the sensor in my breadboard. It is a pretty stable setup!
+   // For negative values use 2's complement, i.e., -2 mg = 0xFF, etc.
+   writeRegister(OFF_X, 0xF9); // X-axis compensation; this is -14 mg
+   writeRegister(OFF_Y, 0x01); // Y-axis compensation; this is +2 mg
+   writeRegister(OFF_Z, 0x00); // z-axis compensation; this is  0 mg adjustment
+   
+   MMA8452Active();  // Set to active to start reading
+}
+
+*/
+
 bool mma8452_init(void)
 {
 	mma8452_i2c_init();
@@ -24,6 +48,11 @@ bool mma8452_verify_device_id(void)
 	mma8452_i2c_register_read(MMA8452_REG_WHO_AM_I, &device_id, 1);
 	
 	return (device_id == MMA8452_DEVICE_ID);
+}
+
+bool mma8452_reset(void)
+{
+	return mma8452_i2c_register_write(MMA8452_REG_CTRL_REG2, 0x40);
 }
 
 bool mma8452_standby(void)
@@ -129,7 +158,7 @@ void mma8452_read_accel(int *destination)
   destination[0] = ((short)(rawData[0]<<8 | rawData[1])) >> 4;
 	destination[1] = ((short)(rawData[2]<<8 | rawData[3])) >> 4;
 	destination[2] = ((short)(rawData[4]<<8 | rawData[5])) >> 4;
-  eat_trace("%d %d %d", destination[0], destination[1], destination[2]);
+  //eat_trace("%d %d %d", destination[0], destination[1], destination[2]);
 }
 
 

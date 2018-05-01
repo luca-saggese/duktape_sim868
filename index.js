@@ -7,6 +7,10 @@ function soc_notify_cb(s, event, result, ack_size){
   eat_trace('soc_notify_cb event:' + event + ' result:'+ result);
 }
 
+function modem_callback(buffer){
+	eat_trace(JSON.stringify(buffer));
+}
+
 function event_callback(event){
 	eat_trace(JSON.stringify(event));
 	if(event.event==1 && event.timer_id==1){
@@ -15,10 +19,33 @@ function event_callback(event){
 	}
 }
 
-//eat_timer_start(1,2000);
-eat_gprs_bearer_hold();
-eat_trace('open bearer ret: ' + eat_gprs_bearer_open('TM', '', ''));
+function eat_sms_new_message_cb(id){
+	eat_trace('new sms arrived ' + id);
+}
 
+function eat_sms_read_cb(msg){
+	eat_trace('message read ' + JSON.stringify(msg));
+}
+
+function test_acc(){
+	eat_trace(eat_mma_init());
+	eat_trace(eat_mma_config(2,0));
+	eat_trace(JSON.stringify(eat_mma_read(2)));
+}
+
+//eat_timer_start(1,2000);
+function init(){
+	//eat_trace('open bearer ret: ' + eat_gprs_bearer_open('TM', '', ''));
+	//eat_gprs_bearer_hold();
+	eat_ftp_init('TM','','');
+	eat_ftp_get("ftp.thingsmind.com","21", "lvx", "existence", "app.bin","",1);
+	eat_set_sms_sc('+447797704000')
+	eat_trace(eat_send_text_sms("+393475541920","test"))
+	eat_modem_write("AT+CNMI=2,2,0,0,0\r") //abilita gli sms in ingresso
+
+}
+
+const SOC_WOULDBLOCK        = -2;
 const SOC_READ    = 0x01;  /* Notify for read */
 const SOC_WRITE   = 0x02;  /* Notify for write */
 const SOC_ACCEPT  = 0x04;  /* Notify for accept */
@@ -56,6 +83,7 @@ const SOC_TCP_TIME_STAMP  = 0x01 << 23;  /* TCP time stamp */
 const SOC_TCP_ACK_MSEG  = 0x01 << 24;  /* TCP ACK multiple segment */
 
 const SOC_SUCCESS           = 0;
+const TRUE =1;
 
 function connectSocket(){
 	//eat_soc_notify_register(soc_notify_cb);

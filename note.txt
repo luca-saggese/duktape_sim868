@@ -1,0 +1,34 @@
+//power on BT
+eat_bt_power(1);
+
+//pairing request
++BTPAIRING: "PC-NS130100361",34:c7:31:aa:37:5b,763191
+
+//pair 
+eat_bt_pair(1,1);
+
+//eanble multi connect
+eat_modem_write('AT+BTSPPCFG=MC,1\r') 
+eat_bt_spp_config("MC",1)
+
+
+//richiesta connessione:
++BTCONNECTING: "20:c9:d0:87:e8:98","SPP" 0
+
+//accetta connessione
+eat_modem_write('AT+BTACPT=1\r')
+eat_bt_spp_accept(1)
+
+//dati in ingresso
++BTSPPDATA: 3,2,te 0
+
+
+
+
+//invio dati
+eat_modem_write('AT+BTSPPSEND=2,5\r');
+eat_bt_spp_write(2,"test");
+
+
+eat_bt_power(1);eat_bt_spp_config("MC",1);
+

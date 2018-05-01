@@ -1,20 +1,21 @@
 internal:
-  - bluetooth 
-    > non si accende
   - canbus
-  - mqtt
   - tcp socket
-  - accelerometer
-    >x & z same value
 
 code:
-  - calibration matrix
+  - calibrazione dinamica
   - send data
   - store data
   - driving behaviour
+  - crash data
+  - comunicazione via bt
 
 js:
   - hw test 
 
-test:
-  - gps
+next:
+  - mqtt
+
+note:
+  - accelerometro:
+    > valutare LIS3DE che arriva fino a 16G (mma8452 arriva a 8G)
