@@ -11,7 +11,8 @@
 #include "eat_sms.h"
 
 #include "duktape.h"
-#include "mma8452.h"
+#include "mma8452/mma8452.h"
+#include "canbus/mcp_can.h"
 
 #include "log.h"
 #include "crash.h"
@@ -92,7 +93,7 @@ duk_ret_t _eat_spi_init(duk_context *ctx) {
 	EatSpiBit_enum bit = (EatSpiBit_enum) duk_get_int(ctx, 2);
 	eat_bool enable_SDI = (eat_bool) duk_get_int(ctx, 3);
 	eat_bool enable_cs = (eat_bool) duk_get_int(ctx, 4);
-	eat_bool ret = eat_spi_init(clk, wire, bit, enable_SDI, enable_cs);
+	eat_bool ret = eat_spi_init_int(clk, wire, bit, enable_SDI, enable_cs);
 	duk_push_int(ctx, ret);
 	return 1;
 }
@@ -101,7 +102,7 @@ duk_ret_t _eat_spi_write(duk_context *ctx) {
 	unsigned char *data = (unsigned char *) duk_get_string(ctx, 0);
 	unsigned char len = (unsigned char) duk_get_int(ctx, 1);
 	eat_bool is_command = (eat_bool) duk_get_int(ctx, 2);
-	eat_bool ret = eat_spi_write(data, len, is_command);
+	eat_bool ret = eat_spi_write_int(data, len, is_command);
 	duk_push_int(ctx, ret);
 	return 1;
 }
@@ -109,7 +110,7 @@ duk_ret_t _eat_spi_write(duk_context *ctx) {
 duk_ret_t _eat_spi_read(duk_context *ctx) {
 	unsigned char len = (unsigned char) duk_get_int(ctx, 0);
   unsigned char data[1024]={0};
-	unsigned char ret = eat_spi_read((unsigned char *)&data, len);
+	unsigned char ret = eat_spi_read_int((unsigned char *)&data, len);
 	duk_push_string(ctx, data);
 	return 1;
 }
@@ -119,7 +120,7 @@ duk_ret_t _eat_spi_write_read(duk_context *ctx) {
 	unsigned char *wdata = (unsigned char *) duk_get_string(ctx, 0);
 	unsigned char wlen = (unsigned char) duk_get_int(ctx, 1);
 	unsigned char rlen = (unsigned char) duk_get_int(ctx, 2);
-	unsigned char ret = eat_spi_write_read(wdata, wlen, (unsigned char *)&rdata, rlen);
+	unsigned char ret = eat_spi_write_read_int(wdata, wlen, (unsigned char *)&rdata, rlen);
 	duk_push_string(ctx, rdata);
 	return 1;
 }
@@ -1685,12 +1686,14 @@ u8 eat_mma_read(u8 scale, float *accelG){
   int accelCount[3];  // Stores the 12-bit signed value
   int i,j;
 
+  int sample_cnt=1;
+
   //facciamo la media di 6 samples presi a 50ms
-  for(i=0;i<6;i++){
+  for(i=0;i<sample_cnt;i++){
       mma8452_read_accel(&accelCount[0]);
       for ( j=0; j<3; j++)
-          accel[j]+=accelCount[j]/6;
-      eat_sleep(50);
+          accel[j]+=accelCount[j]/sample_cnt;
+      if(sample_cnt>1) eat_sleep(50);
   }
   //rotate(&accel[0],&rotaccel[0]);
   
@@ -1731,11 +1734,31 @@ duk_ret_t _eat_cal_static(duk_context *ctx) {
 	return 1;
 }
 
+duk_ret_t _eat_can_init(duk_context *ctx) {
+  u8 ret = can_init_spi();
+	duk_push_int(ctx, ret);
+	return 1;
+}
+
+
+duk_ret_t _spi_test(duk_context *ctx) {
+  const u8 id = duk_get_int(ctx, 0);
+  mcp2515_test(id);
+	return 0;
+}
+
+
 
 register_bindings(duk_context *ctx){
   _ctx=ctx;
 
   eat_soc_notify_register(soc_notify_cb);
+
+  duk_push_c_function(ctx, _spi_test, 1);
+  duk_put_global_string(ctx, "spi_test");
+
+  duk_push_c_function(ctx, _eat_can_init, 0);
+  duk_put_global_string(ctx, "eat_can_init");
 
   duk_push_c_function(ctx, _eat_cal_static, 2);
   duk_put_global_string(ctx, "eat_cal_static");

@@ -13,8 +13,11 @@ LIB_RESULE=$(MODULE_NAME).a
 
 #Two mothods#
 #First mothod#
-S1 := $(wildcard *.c)
+S1 := $(wildcard *.c) $(wildcard */*.c)
 SOURCE:=$(S1)
+
+
+
 
 #Second mothod#
 #SOURCE := app_demo_adc.c \

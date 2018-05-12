@@ -16,7 +16,7 @@ unsigned short(*const  eat_uart_write )(EatUart_enum uart, const unsigned char *
 const fs=require('fs');
 let func_list=[];
 
-const ws=fs.createWriteStream('./internal_functions/internal.c');
+const ws=fs.createWriteStream('./internal_functions/internal.c.new');
 //ws.write('static register_bindings(duk_context *ctx){');
 
 fs.readFile('./internal_functions/list.txt', (err, data) => {

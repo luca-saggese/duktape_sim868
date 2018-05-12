@@ -40,9 +40,11 @@
 #include "eat_clib_define.h" //only in main.c
 
 
-#include "eat_interface.h"
+
 #include "eat_gps.h" 
 #include "eat_fs.h"
+#include "timer.h"
+#include "spi.h"
 
 #include "eat_mem.h"
 #define DYNAMIC_MEM_SIZE 1024*300
@@ -79,7 +81,7 @@ static u8 rx_buf[EAT_UART_RX_BUF_LEN_MAX + 1] = {0};
 static u16 wr_uart_offset = 0; //用来标记uart未写完的数据
 static u16 wr_uart_len = 0; //下次需要往串口写的数据长度
 static char gps_info_buf[NMEA_BUFF_SIZE]="";
-
+u8 ret_pin=1;
 static char spp_buffer[500]={0};
 //static duk_context *jsctx;
 /********************************************************************
@@ -237,7 +239,7 @@ APP_ENTRY_FLAG
 	{
 		app_main,
 		app_func_ext1,
-		(app_user_func)EAT_NULL,//app_user1,
+		(app_user_func)app_timer_thread,//app_user1,
 		(app_user_func)EAT_NULL,//app_user2,
 		(app_user_func)EAT_NULL,//app_user3,
 		(app_user_func)EAT_NULL,//app_user4,
@@ -275,6 +277,24 @@ void app_func_ext1(void *data)
   eat_uart_set_at_port(EAT_UART_USB);// UART1 is as AT PORT
   //eat_modem_set_poweron_urc_dir(EAT_USER_0);
 
+/*
+  ret_pin=ret_pin && eat_pin_set_mode(EAT_PIN5_UART1_DCD, EAT_PIN_MODE_SPI);
+  ret_pin=ret_pin && eat_pin_set_mode(EAT_PIN6_UART1_DTR, EAT_PIN_MODE_SPI);
+  ret_pin=ret_pin && eat_pin_set_mode(EAT_PIN7_UART1_RI, EAT_PIN_MODE_SPI);
+  ret_pin=ret_pin && eat_pin_set_mode(EAT_PIN14_SIM1_DET, EAT_PIN_MODE_SPI);
+  */
+  //ret_pin=ret_pin && eat_gpio_setup(EAT_PIN5_UART1_DCD,EAT_GPIO_DIR_OUTPUT, EAT_GPIO_LEVEL_HIGH);
+
+/*
+
+EatPinName_enum SPI_PIN_CS = EAT_PIN5_UART1_DCD;
+EatPinName_enum SPI_PIN_CLK = EAT_PIN6_UART1_DTR;
+EatPinName_enum SPI_PIN_MOSI = EAT_PIN7_UART1_RI;
+EatPinName_enum SPI_PIN_MISO = EAT_PIN14_SIM1_DET;
+EatPinName_enum SPI_PIN_CD = EAT_PIN42_STATUS;
+*/
+  //eat_spi_config(EAT_PIN14_SIM1_DET, EAT_PIN7_UART1_RI, EAT_PIN42_STATUS, EAT_PIN5_UART1_DCD);
+  eat_spi_init_int(1024, EAT_SPI_3WIRE, EAT_SPI_BIT8, EAT_TRUE, EAT_TRUE);
 }
 
 
@@ -429,6 +449,9 @@ void app_main(void *data)
 
     eat_trace("booting: version:%s, build_time=%s %s. core(version:%s, buildno=%s, buildtime=%s)",
             VERSION_STR, __DATE__, __TIME__, eat_get_version(), eat_get_buildno(), eat_get_buildtime());
+
+
+    eat_trace("setting pins: %d", ret_pin);
 
     eat_trace(" app_main ENTRY");
     mem_ini_flag = eat_mem_init(app_dynamic_mem, sizeof(app_dynamic_mem));
