@@ -64,9 +64,9 @@ u8 mcp2515_setCANCTRL_Mode(const u8 newmode)
     mcp2515_modifyRegister(MCP_CANCTRL, MODE_MASK, newmode);
 
     i = mcp2515_readRegister(MCP_CANCTRL);
-    eat_trace("MCP_CANCTRL: %d",i);
+    
     i &= MODE_MASK;
-
+    eat_trace("setCANCTRL: 0x%02x (should be 0x%02x)", i, newmode);
     if ( i == newmode ) 
     {
         return MCP2515_OK;

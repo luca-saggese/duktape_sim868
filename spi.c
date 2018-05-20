@@ -6,17 +6,17 @@
 #include "eat_periphery.h"
 #include "eat_interface.h"
 
-static u8  SPI_PIN_CS = EAT_PIN42_STATUS;
-static u8  SPI_PIN_CLK = EAT_PIN5_UART1_DCD;
-static u8  SPI_PIN_MOSI = EAT_PIN7_UART1_RI;
-static u8  SPI_PIN_MISO = EAT_PIN41_NETLIGHT;
-static u8  SPI_PIN_CD = EAT_PIN6_UART1_DTR;
+static u8 SPI_PIN_CS = EAT_PIN5_UART1_DCD;
+static u8 SPI_PIN_CLK = EAT_PIN7_UART1_RI;
+static u8 SPI_PIN_MOSI = EAT_PIN42_STATUS;
+static u8 SPI_PIN_MISO = EAT_PIN41_NETLIGHT;
+
+static u8  SPI_PIN_CD = EAT_PIN58_GPIO2;
 /*
-EatPinName_enum SPI_PIN_CS = EAT_PIN5_UART1_DCD;
-EatPinName_enum SPI_PIN_CLK = EAT_PIN6_UART1_DTR;
-EatPinName_enum SPI_PIN_MOSI = EAT_PIN7_UART1_RI;
-EatPinName_enum SPI_PIN_MISO = EAT_PIN14_SIM1_DET;
-EatPinName_enum SPI_PIN_CD = EAT_PIN42_STATUS;
+  static u8  SPI_PIN_CS = EAT_PIN42_STATUS;
+  static u8  SPI_PIN_CLK = EAT_PIN5_UART1_DCD;
+  static u8  SPI_PIN_MOSI = EAT_PIN7_UART1_RI;
+  static u8  SPI_PIN_MISO = EAT_PIN41_NETLIGHT;
 */
 
 static int SPI_CLK=EAT_SPI_CLK_13M;
@@ -33,7 +33,6 @@ int delay_for_spi() {
     r1--;
   }
   return 0;
-  //eat_sleep(5);
 }
 
 u8 eat_spi_config(EatPinName_enum miso, EatPinName_enum mosi, EatPinName_enum cs, EatPinName_enum clk){
@@ -45,29 +44,29 @@ u8 eat_spi_config(EatPinName_enum miso, EatPinName_enum mosi, EatPinName_enum cs
 }
 
 eat_bool eat_spi_init_int(EatSpiClk_enum clk, EatSpiWire_enum wire, EatSpiBit_enum bit, eat_bool enable_SDI, eat_bool enable_cs) {
-    SPI_CLK= clk;
-    SPI_WIRE = wire;
-    SPI_BIT= bit;
-    SPI_USE_MISO = enable_SDI;
-    SPI_USE_CS= enable_cs;
+  SPI_CLK= clk;
+  SPI_WIRE = wire;
+  SPI_BIT= bit;
+  SPI_USE_MISO = enable_SDI;
+  SPI_USE_CS= enable_cs;
 
-    if (SPI_USE_CS) { //CS
-      eat_pin_set_mode(SPI_PIN_CS, 0x0);
-      eat_gpio_setup(SPI_PIN_CS, 0x1, 0x1);
-    }
-    eat_pin_set_mode(SPI_PIN_CLK, 0x0);
-    eat_gpio_setup(SPI_PIN_CLK, 0x1, 0x1);
-    eat_pin_set_mode(SPI_PIN_MOSI, 0x0);
-    eat_gpio_setup(SPI_PIN_MOSI, 0x1, 0x1);
-    if (SPI_WIRE == EAT_SPI_4WIRE) {
-            eat_pin_set_mode(SPI_PIN_CD, 0x0);
-            eat_gpio_setup(SPI_PIN_CD, 0x1, 0x1);
-    }
-    if (SPI_USE_MISO) { //MISO
-            eat_pin_set_mode(SPI_PIN_MISO, 0x0);
-            eat_gpio_setup(SPI_PIN_MISO, 0x0, 0x1); //INPUT, HIGH
-    }
-    return 0x1;
+  if (SPI_USE_CS) { //CS
+    eat_pin_set_mode(SPI_PIN_CS, 0x0);
+    eat_gpio_setup(SPI_PIN_CS, 0x1, 0x1);
+  }
+  eat_pin_set_mode(SPI_PIN_CLK, 0x0);
+  eat_gpio_setup(SPI_PIN_CLK, 0x1, 0x1);
+  eat_pin_set_mode(SPI_PIN_MOSI, 0x0);
+  eat_gpio_setup(SPI_PIN_MOSI, 0x1, 0x1);
+  if (SPI_WIRE == EAT_SPI_4WIRE) {
+    eat_pin_set_mode(SPI_PIN_CD, 0x0);
+    eat_gpio_setup(SPI_PIN_CD, 0x1, 0x1);
+  }
+  if (SPI_USE_MISO) { //MISO
+    eat_pin_set_mode(SPI_PIN_MISO, 0x0);
+    eat_gpio_setup(SPI_PIN_MISO, 0x0, 0x1); //INPUT, HIGH
+  }
+  return 0x1;
 }
 
 unsigned char eat_spi_read_int(unsigned char *data, unsigned char len) {
