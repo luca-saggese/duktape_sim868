@@ -1,5 +1,7 @@
 # duktape_sim868
-Ducktape implementation for sim868
+Javascript (Ducktape) implementation for sim868
+
+you can call all eat function directly from the serial line
 
 You will need the EAT for sim868 and compile from there.
 
